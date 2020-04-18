@@ -48,7 +48,7 @@ persistencyclean:
 #
 # Multithreaded stack (linked list)
 #
-bin/pstack-ll-romlogfc: pstack-ll.cpp PBenchmarkStacks.hpp TMLinkedListStackByRef.hpp romulus/RomulusLog.hpp
+bin/pstack-ll-romlogfc: pstack-ll.cpp PBenchmarkStacks.hpp TMLinkedListStackByRef.hpp romulus/RomLogFC.hpp
 	$(CXX) $(CXXFLAGS) -DUSE_ROM_LOG_FC $(INCLUDES) pstack-ll.cpp -o bin/pstack-ll-romlogfc -lpthread
 
 # bin/pstack-ll-pmdk: pstack-ll.cpp PBenchmarkStacks.hpp TMLinkedListStackByRef.hpp ../ptms/pmdk/PMDKTM.hpp

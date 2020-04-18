@@ -22,7 +22,7 @@
 #include "ptms/romuluslog/RomulusLog.hpp"
 #define DATA_FILE "data/pstack-ll-romlog.txt"
 #elif defined USE_ROM_LOG_FC
-#include "romulus/RomulusLog.hpp"
+#include "romulus/RomLogFC.hpp"
 #define DATA_FILE "data/pstack-ll-romlogfc.txt"
 #elif defined USE_OFWF
 #include "one_file/OneFilePTMWF.hpp"
@@ -63,7 +63,7 @@ int main(void) {
 #elif defined USE_ROMLOG
             results[it] = bench.pushPop<TMLinkedListStackByRef<uint64_t,romuluslog::RomulusLog,romuluslog::persist>, romuluslog::RomulusLog>  (cName, numPairs, numRuns);
 #elif defined USE_ROM_LOG_FC
-            results[it] = bench.pushPop<TMLinkedListStackByRef<uint64_t,romuluslog::RomulusLog,romuluslog::persist>, romuluslog::RomulusLog>  (cName, numPairs, numRuns);
+            results[it] = bench.pushPop<TMLinkedListStackByRef<uint64_t,romlogfc::RomLog,romlogfc::persist>, romlogfc::RomLog>  (cName, numPairs, numRuns);
 #elif defined USE_OFWF
             results[it] = bench.pushPop<TMLinkedListStack<uint64_t,pofwf::OneFileWF,pofwf::tmtype>,                  pofwf::OneFileWF>        (cName, numPairs, numRuns);
 #elif defined USE_DUALZONE_2F_FC
