@@ -78,7 +78,7 @@ private:
 
     static const long long NSEC_IN_SEC = 1000000000LL;
 
-    const uint64_t kNumElements = 100000; // 100k elements in the queue
+    const uint64_t kNumElements = 0; // Number of initial items in the stack
 
     int numThreads;
 
@@ -92,7 +92,6 @@ public:
     /**
      * enqueue-dequeue pairs: in each iteration a thread executes an enqueue followed by a dequeue;
      * the benchmark executes 10^8 pairs partitioned evenly among all threads;
-     * WARNING: If you modify this, please modify enqDeqNoTransaction() also
      */
     template<typename STACK, typename PTM>
     uint64_t pushPop(std::string& className, const long numPairs, const int numRuns) {
@@ -140,79 +139,6 @@ public:
             startFlag.store(false);
             PTM::updateTx([&] () {
                 PTM::tmDelete(stack);
-            });
-        }
-
-        // Sum up all the time deltas of all threads so we can find the median run
-        vector<nanoseconds> agg(numRuns);
-        for (int irun = 0; irun < numRuns; irun++) {
-            agg[irun] = 0ns;
-            for (int tid = 0; tid < numThreads; tid++) {
-                agg[irun] += deltas[tid][irun];
-            }
-        }
-
-        // Compute the median. numRuns should be an odd number
-        sort(agg.begin(),agg.end());
-        auto median = agg[numRuns/2].count()/numThreads; // Normalize back to per-thread time (mean of time for this run)
-
-        cout << "Total Ops/sec = " << numPairs*2*NSEC_IN_SEC/median << "\n";
-        return (numPairs*2*NSEC_IN_SEC/median);
-    }
-
-
-
-
-    /*
-     * WARNING: If you modify this, please modify enqDeq() also
-     */
-    template<typename Q, typename PTM>
-    uint64_t pushPopSequential(std::string& className, const long numPairs, const int numRuns) {
-        nanoseconds deltas[numThreads][numRuns];
-        atomic<bool> startFlag = { false };
-        Q* queue = nullptr;
-        className = Q::className();
-        cout << "##### " << className << " #####  \n";
-
-        auto enqdeq_lambda = [this,&startFlag,&numPairs,&queue](nanoseconds *delta, const int tid) {
-            //UserData* ud = new UserData{0,0};
-            uint64_t* ud = new uint64_t(42);
-            while (!startFlag.load()) {} // Spin until the startFlag is set
-            // Warmup phase
-            for (long long iter = 0; iter < numPairs/(numThreads*10); iter++) { // Do 1/10 iterations as warmup
-                PTM::updateTxSeq([&] () {
-                    queue->enqueue(*ud, tid);
-                    if (queue->dequeue(tid) == queue->EMPTY) cout << "Error at warmup dequeueing iter=" << iter << "\n";
-                });
-            }
-            // Measurement phase
-            auto startBeats = steady_clock::now();
-            for (long long iter = 0; iter < numPairs/numThreads; iter++) {
-                PTM::updateTxSeq([&] () {
-                    queue->enqueue(*ud, tid);
-                    if (queue->dequeue(tid) == queue->EMPTY) cout << "Error at measurement dequeueing iter=" << iter << "\n";
-                });
-            }
-            auto stopBeats = steady_clock::now();
-            *delta = stopBeats - startBeats;
-        };
-
-        for (int irun = 0; irun < numRuns; irun++) {
-            PTM::updateTxSeq([&] () { // It's ok to capture by reference, only the main thread is active (but it is not ok for CX-PTM)
-                queue = PTM::template tmNew<Q>();
-            });
-            // Fill the queue with an initial amount of nodes
-            uint64_t* ud = new uint64_t(47);
-            for (uint64_t ielem = 0; ielem < kNumElements; ielem++) queue->enqueue(*ud);
-            thread enqdeqThreads[numThreads];
-            for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = thread(enqdeq_lambda, &deltas[tid][irun], tid);
-            startFlag.store(true);
-            // Sleep for 2 seconds just to let the threads see the startFlag
-            this_thread::sleep_for(2s);
-            for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid].join();
-            startFlag.store(false);
-            PTM::updateTxSeq([&] () {
-                PTM::tmDelete(queue);
             });
         }
 
