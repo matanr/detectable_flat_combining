@@ -32,8 +32,7 @@ all: $(BINARIES_SEQ) persistencyclean
 .PHONY : clean persistencyclean
 
 clean: persistencyclean
-	rm -f bin/*
-	rm -f lib/*
+	rm -f bin/pstack*
 
 persistencyclean:
 	rm -f /mnt/pmem0/durable
@@ -51,8 +50,8 @@ persistencyclean:
 bin/pstack-ll-romlogfc: pstack-ll.cpp PBenchmarkStacks.hpp TMLinkedListStackByRef.hpp romulus/RomLogFC.hpp
 	$(CXX) $(CXXFLAGS) -DUSE_ROM_LOG_FC $(INCLUDES) pstack-ll.cpp -o bin/pstack-ll-romlogfc -lpthread
 
-# bin/pstack-ll-pmdk: pstack-ll.cpp PBenchmarkStacks.hpp TMLinkedListStackByRef.hpp ../ptms/pmdk/PMDKTM.hpp
-# 	$(CXX) $(CXXFLAGS) -DUSE_PMDK $(INCLUDES) pstack-ll.cpp -o bin/pstack-ll-pmdk -lpthread -lpmemobj
+bin/pstack-ll-pmdk: pstack-ll.cpp PBenchmarkStacks.hpp TMLinkedListStackByRef.hpp pmdk/PMDKTM.hpp
+	$(CXX) $(CXXFLAGS) -DUSE_PMDK $(INCLUDES) pstack-ll.cpp -o bin/pstack-ll-pmdk -lpthread -lpmemobj
 
 bin/pstack-ll-oflf: pstack-ll.cpp PBenchmarkStacks.hpp TMLinkedListStackByRef.hpp one_file/OneFilePTMLF.hpp
 	$(CXX) $(CXXFLAGS) -DUSE_OFLF $(INCLUDES) pstack-ll.cpp -o bin/pstack-ll-oflf -lpthread
