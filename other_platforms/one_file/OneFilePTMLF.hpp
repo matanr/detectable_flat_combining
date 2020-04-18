@@ -62,6 +62,15 @@
  */
 namespace poflf {
 
+// Size of the persistent memory region
+#ifndef PM_REGION_SIZE
+#define PM_REGION_SIZE 1024*1024*1024ULL // 1GB for now
+#endif
+// Name of persistent file mapping (back)
+#ifndef PM_FILE_NAME
+#define PM_FILE_NAME   "/dev/shm/trinityfc_shared"
+#endif
+
 //
 // User configurable variables.
 // Feel free to change these if you need larger transactions, more allocations per transacation, or more threads.
@@ -75,14 +84,10 @@ static const uint64_t TX_MAX_STORES = 40*1024;
 static const uint64_t HASH_BUCKETS = 2048;
 
 // Persistent-specific configuration
-// Name of persistent file mapping
-static const char * PFILE_NAME = "/dev/shm/ponefilelf_shared";
 // Start address of mapped persistent memory
 static uint8_t* PREGION_ADDR = (uint8_t*)0x7fea00000000;
-// Size of persistent memory. Part of it will be used by the redo logs
-static const uint64_t PREGION_SIZE = 1024*1024*1024ULL;   // 1 GB by default
 // End address of mapped persistent memory
-static uint8_t* PREGION_END = (PREGION_ADDR+PREGION_SIZE);
+static uint8_t* PREGION_END = (PREGION_ADDR+PM_REGION_SIZE);
 // Maximum number of root pointers available for the user
 static const uint64_t MAX_ROOT_POINTERS = 100;
 
@@ -536,6 +541,75 @@ static constexpr AbortedTx AbortedTxException {};
 class OneFileLF;
 extern OneFileLF gOFLF;
 
+// T is typically a pointer to a node, but it can be integers or other stuff, as long as it fits in 64 bits
+template<typename T> struct tmtype : tmtypebase<T> {
+    tmtype() { }
+
+    tmtype(T initVal) { pstore(initVal); }
+
+    // Casting operator
+    operator T() { return pload(); }
+
+    // Casting to const
+    operator T() const { return pload(); }
+
+    // Prefix increment operator: ++x
+    void operator++ () { pstore(pload()+1); }
+    // Prefix decrement operator: --x
+    void operator-- () { pstore(pload()-1); }
+    void operator++ (int) { pstore(pload()+1); }
+    void operator-- (int) { pstore(pload()-1); }
+    tmtype<T>& operator+= (const T& rhs) { pstore(pload() + rhs); return *this; }
+    tmtype<T>& operator-= (const T& rhs) { pstore(pload() - rhs); return *this; }
+
+    // Equals operator
+    template <typename Y, typename = typename std::enable_if<std::is_convertible<Y, T>::value>::type>
+    bool operator == (const tmtype<Y> &rhs) { return pload() == rhs; }
+    // Difference operator: first downcast to T and then compare
+    template <typename Y, typename = typename std::enable_if<std::is_convertible<Y, T>::value>::type>
+    bool operator != (const tmtype<Y> &rhs) { return pload() != rhs; }
+    // Relational operators
+    template <typename Y, typename = typename std::enable_if<std::is_convertible<Y, T>::value>::type>
+    bool operator < (const tmtype<Y> &rhs) { return pload() < rhs; }
+    template <typename Y, typename = typename std::enable_if<std::is_convertible<Y, T>::value>::type>
+    bool operator > (const tmtype<Y> &rhs) { return pload() > rhs; }
+    template <typename Y, typename = typename std::enable_if<std::is_convertible<Y, T>::value>::type>
+    bool operator <= (const tmtype<Y> &rhs) { return pload() <= rhs; }
+    template <typename Y, typename = typename std::enable_if<std::is_convertible<Y, T>::value>::type>
+    bool operator >= (const tmtype<Y> &rhs) { return pload() >= rhs; }
+
+    // Operator arrow ->
+    T operator->() { return pload(); }
+
+    // Copy constructor
+    tmtype<T>(const tmtype<T>& other) { pstore(other.pload()); }
+
+    // Assignment operator from an tmtype
+    tmtype<T>& operator=(const tmtype<T>& other) {
+        pstore(other.pload());
+        return *this;
+    }
+
+    // Assignment operator from a value
+    tmtype<T>& operator=(T value) {
+        pstore(value);
+        return *this;
+    }
+
+    // Meant to be called when know we're the only ones touching
+    // these contents, for example, in the constructor of an object, before
+    // making the object visible to other threads.
+    inline void isolated_store(T newVal) {
+        tmtypebase<T>::val.store((uint64_t)newVal, std::memory_order_relaxed);
+    }
+
+    // We don't need to check curTx here because we're not de-referencing
+    // the val. It's only after a load() that the val may be de-referenced
+    // (in user code), therefore we do the check on load() only.
+    inline void pstore(T newVal);
+    inline T pload() const;
+};
+
 
 /**
  * <h1> One-File PTM (Lock-Free) </h1>
@@ -562,12 +636,14 @@ public:
     EsLoco<tmtype>                       esloco {};
     PMetadata*                           pmd {nullptr};
     std::atomic<uint64_t>*               curTx {nullptr};              // Pointer to persistent memory location of curTx (it's in PMetadata)
-    WriteSet*                            writeSets;                    // Two write-sets for each thread
+    WriteSet*                            writeSets;                    // One write-set for each thread
+
+    struct tmbase : public poflf::tmbase { };
 
     OneFileLF() {
         opData = new OpData[REGISTRY_MAX_THREADS];
         writeSets = new WriteSet[REGISTRY_MAX_THREADS];
-        mapPersistentRegion(PFILE_NAME, PREGION_ADDR, PREGION_SIZE);
+        mapPersistentRegion(PM_FILE_NAME, PREGION_ADDR, PM_REGION_SIZE);
     }
 
     ~OneFileLF() {
@@ -672,7 +748,7 @@ public:
         if (debug) printf("Committed transaction (%ld,%ld) with %ld stores\n", seq+1, (uint64_t)tid, writeSets[tid].numStores);
         return true;
     }
-
+/*
     // Same as beginTx/endTx transaction, but with lambdas, and it handles AbortedTx exceptions
     template<typename R, typename F> R transaction(F&& func) {
         const int tid = ThreadRegistry::getTID();
@@ -694,7 +770,7 @@ public:
         --myopd.nestedTrans;
         return retval;
     }
-
+*/
     // Same as above, but returns void
     template<typename F> void transaction(F&& func) {
         const int tid = ThreadRegistry::getTID();
@@ -719,10 +795,22 @@ public:
     }
 
     // It's silly that these have to be static, but we need them for the (SPS) benchmarks due to templatization
-    template<typename R, typename F> static R updateTx(F&& func) { return gOFLF.transaction<R>(func); }
-    template<typename R, typename F> static R readTx(F&& func) { return gOFLF.transaction<R>(func); }
+    //template<typename R, typename F> static R updateTx(F&& func) { return gOFLF.transaction<R>(func); }
+    //template<typename R, typename F> static R readTx(F&& func) { return gOFLF.transaction<R>(func); }
     template<typename F> static void updateTx(F&& func) { gOFLF.transaction(func); }
     template<typename F> static void readTx(F&& func) { gOFLF.transaction(func); }
+    template<typename F> static void updateTxSeq(F&& func) { gOFLF.transaction(func); }
+    template<typename F> static void readTxSeq(F&& func) { gOFLF.transaction(func); }
+
+    // TODO: Remove these two once we make CX have void transactions
+    template<typename R,class F> inline static R readTx(F&& func) {
+        gOFLF.transaction([&]() {func();});
+        return R{};
+    }
+    template<typename R,class F> inline static R updateTx(F&& func) {
+        gOFLF.transaction([&]() {func();});
+        return R{};
+    }
 
     template <typename T, typename... Args> static T* tmNew(Args&&... args) {
     //template <typename T> static T* tmNew() {
@@ -765,13 +853,13 @@ public:
         gOFLF.esloco.free(obj);
     }
 
-    template <typename T> static inline T* get_object(int idx) {
-        tmtype<T*>* ptr = (tmtype<T*>*)&(gOFLF.pmd->rootPtrs[idx]);
+    static inline void* get_object(int idx) {
+        tmtype<void*>* ptr = (tmtype<void*>*)&(gOFLF.pmd->rootPtrs[idx]);
         return ptr->pload();
     }
 
-    template <typename T> static inline void put_object(int idx, T* obj) {
-        tmtype<T*>* ptr = (tmtype<T*>*)&(gOFLF.pmd->rootPtrs[idx]);
+    static inline void put_object(int idx, void* obj) {
+        tmtype<void*>* ptr = (tmtype<void*>*)&(gOFLF.pmd->rootPtrs[idx]);
         ptr->pstore(obj);
     }
 
@@ -793,15 +881,15 @@ private:
         if (debug) printf("Applying %ld stores in write-set\n", writeSets[tid].numStores);
         writeSets[tid].apply(seq, tid);
         writeSets[tid].flushModifications();
-        if (opd.pWriteSet->request.load() == lcurTx) {
-            const uint64_t newReq = seqidx2trans(seq+1,idx);
+        const uint64_t newReq = seqidx2trans(seq+1,idx);
+        if (opd.pWriteSet->request.load(std::memory_order_acquire) == lcurTx) {
             opd.pWriteSet->request.compare_exchange_strong(lcurTx, newReq);
         }
     }
 
     // Upon restart, re-applies the last transaction, so as to guarantee that
     // we have a consistent state in persistent memory.
-    // This is not used on x86 because the DCAS has atomicity writting to persistent memory.
+    // This is not needed on x86, where the DCAS has atomicity writting to persistent memory.
     void recover() {
         uint64_t lcurTx = curTx->load(std::memory_order_acquire);
         opData[trans2idx(lcurTx)].pWriteSet->applyFromRecover();
@@ -811,96 +899,37 @@ private:
 
 
 
-// T is typically a pointer to a node, but it can be integers or other stuff, as long as it fits in 64 bits
-template<typename T> struct tmtype : tmtypebase<T> {
-    tmtype() { }
-
-    tmtype(T initVal) { pstore(initVal); }
-
-    // Casting operator
-    operator T() { return pload(); }
-
-    // Prefix increment operator: ++x
-    void operator++ () { pstore(pload()+1); }
-    // Prefix decrement operator: --x
-    void operator-- () { pstore(pload()-1); }
-    void operator++ (int) { pstore(pload()+1); }
-    void operator-- (int) { pstore(pload()-1); }
-
-    // Equals operator: first downcast to T and then compare
-    bool operator == (const T& otherval) const { return pload() == otherval; }
-
-    // Difference operator: first downcast to T and then compare
-    bool operator != (const T& otherval) const { return pload() != otherval; }
-
-    // Relational operators
-    bool operator < (const T& rhs) { return pload() < rhs; }
-    bool operator > (const T& rhs) { return pload() > rhs; }
-    bool operator <= (const T& rhs) { return pload() <= rhs; }
-    bool operator >= (const T& rhs) { return pload() >= rhs; }
-
-    // Operator arrow ->
-    T operator->() { return pload(); }
-
-    // Copy constructor
-    tmtype<T>(const tmtype<T>& other) { pstore(other.pload()); }
-
-    // Assignment operator from an tmtype
-    tmtype<T>& operator=(const tmtype<T>& other) {
-        pstore(other.pload());
-        return *this;
-    }
-
-    // Assignment operator from a value
-    tmtype<T>& operator=(T value) {
-        pstore(value);
-        return *this;
-    }
-
-    // Operator &
-    T* operator&() {
-        return (T*)this;
-    }
-
-    // Meant to be called when know we're the only ones touching
-    // these contents, for example, in the constructor of an object, before
-    // making the object visible to other threads.
-    inline void isolated_store(T newVal) {
+// We don't need to check curTx here because we're not de-referencing
+// the val. It's only after a load() that the val may be de-referenced
+// (in user code), therefore we do the check on load() only.
+template<typename T> inline void tmtype<T>::pstore(T newVal) {
+    OpData* const myopd = tl_opdata;
+    if (myopd == nullptr) { // Looks like we're outside a transaction
         tmtypebase<T>::val.store((uint64_t)newVal, std::memory_order_relaxed);
+    } else {
+        gOFLF.writeSets[tl_tcico.tid].addOrReplace(this, (uint64_t)newVal);
     }
+}
 
-    // We don't need to check curTx here because we're not de-referencing
-    // the val. It's only after a load() that the val may be de-referenced
-    // (in user code), therefore we do the check on load() only.
-    inline void pstore(T newVal) {
-        OpData* const myopd = tl_opdata;
-        if (myopd == nullptr) { // Looks like we're outside a transaction
-            tmtypebase<T>::val.store((uint64_t)newVal, std::memory_order_relaxed);
-        } else {
-            gOFLF.writeSets[tl_tcico.tid].addOrReplace(this, (uint64_t)newVal);
-        }
-    }
-
-    // We have to check if there is a new ongoing transaction and if so, abort
-    // this execution immediately for two reasons:
-    // 1. Memory Reclamation: the val we're returning may be a pointer to an
-    // object that has since been retired and deleted, therefore we can't allow
-    // user code to de-reference it;
-    // 2. Invariant Conservation: The val we're reading may be from a newer
-    // transaction, which implies that it may break an invariant in the user code.
-    // See examples of invariant breaking in this post:
-    // http://concurrencyfreaks.com/2013/11/stampedlocktryoptimisticread-and.html
-    inline T pload() const {
-        T lval = (T)tmtypebase<T>::val.load(std::memory_order_acquire);
-        OpData* const myopd = tl_opdata;
-        if (myopd == nullptr) return lval;
-        if ((uint8_t*)this < PREGION_ADDR || (uint8_t*)this > PREGION_END) return lval;
-        uint64_t lseq = tmtypebase<T>::seq.load(std::memory_order_acquire);
-        if (lseq > trans2seq(myopd->curTx)) throw AbortedTxException;
-        if (tl_is_read_only) return lval;
-        return (T)gOFLF.writeSets[tl_tcico.tid].lookupAddr(this, (uint64_t)lval);
-    }
-};
+// We have to check if there is a new ongoing transaction and if so, abort
+// this execution immediately for two reasons:
+// 1. Memory Reclamation: the val we're returning may be a pointer to an
+// object that has since been retired and deleted, therefore we can't allow
+// user code to de-reference it;
+// 2. Invariant Conservation: The val we're reading may be from a newer
+// transaction, which implies that it may break an invariant in the user code.
+// See examples of invariant breaking in this post:
+// http://concurrencyfreaks.com/2013/11/stampedlocktryoptimisticread-and.html
+template<typename T> inline T tmtype<T>::pload() const {
+    T lval = (T)tmtypebase<T>::val.load(std::memory_order_acquire);
+    OpData* const myopd = tl_opdata;
+    if (myopd == nullptr) return lval;
+    if ((uint8_t*)this < PREGION_ADDR || (uint8_t*)this > PREGION_END) return lval;
+    uint64_t lseq = tmtypebase<T>::seq.load(std::memory_order_acquire);
+    if (lseq > trans2seq(myopd->curTx)) throw AbortedTxException;
+    if (tl_is_read_only) return lval;
+    return (T)gOFLF.writeSets[tl_tcico.tid].lookupAddr(this, (uint64_t)lval);
+}
 
 
 //
@@ -912,8 +941,8 @@ template<typename F> static void updateTx(F&& func) { gOFLF.transaction(func); }
 template<typename F> static void readTx(F&& func) { gOFLF.transaction(func); }
 template<typename T, typename... Args> T* tmNew(Args&&... args) { return OneFileLF::tmNew<T>(std::forward<Args>(args)...); }
 template<typename T> void tmDelete(T* obj) { OneFileLF::tmDelete<T>(obj); }
-template<typename T> static T* get_object(int idx) { return OneFileLF::get_object<T>(idx); }
-template<typename T> static void put_object(int idx, T* obj) { OneFileLF::put_object<T>(idx, obj); }
+static void* get_object(int idx) { return OneFileLF::get_object(idx); }
+static void put_object(int idx, void* obj) { OneFileLF::put_object(idx, obj); }
 inline static void* tmMalloc(size_t size) { return OneFileLF::tmMalloc(size); }
 inline static void tmFree(void* obj) { OneFileLF::tmFree(obj); }
 

@@ -30,3 +30,6 @@
 *.exe
 *.out
 *.app
+bin/pstack-ll-oflf
+bin/pstack-ll-pmdk
+bin/pstack-ll-romlogfc

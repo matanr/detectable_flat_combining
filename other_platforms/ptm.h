@@ -300,7 +300,7 @@
 #define PTM_FILEXT         "dzv4"
 
 #elif defined USE_OFLF
-#include "onefile/OneFilePTMLF.hpp"
+#include "one_file/OneFilePTMLF.hpp"
 #define PTM_CLASS          poflf::OneFileLF
 #define PTM_UPDATE_TX      poflf::OneFileLF::updateTx
 #define PTM_READ_TX        poflf::OneFileLF::readTx

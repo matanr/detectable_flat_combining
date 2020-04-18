@@ -18,9 +18,6 @@
 #elif defined USE_ROMLR
 #include "ptms/romuluslr/RomulusLR.hpp"
 #define DATA_FILE "data/pstack-ll-romlr.txt"
-#elif defined USE_ROMLOG
-#include "ptms/romuluslog/RomulusLog.hpp"
-#define DATA_FILE "data/pstack-ll-romlog.txt"
 #elif defined USE_ROM_LOG_FC
 #include "romulus/RomLogFC.hpp"
 #define DATA_FILE "data/pstack-ll-romlogfc.txt"
