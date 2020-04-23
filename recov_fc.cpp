@@ -1,5 +1,5 @@
 /*
- * array.cpp -- recoverable flat combining implemented using libpmemobj C++ bindings
+ * recov_fc.cpp -- recoverable flat combining implemented using libpmemobj C++ bindings
  */
 #include <sys/stat.h>
 #include <bits/stdc++.h>
@@ -29,16 +29,6 @@ using namespace pmem::obj;
 
 std::atomic<bool> cLock {false};    // holds true when locked, holds false when unlocked
 bool garbage_collected = false;
-
-// struct result {
-//     p<size_t> val;
-//     p<size_t> epoch;
-// } ;
-
-// struct operation {
-//     p<size_t> name;
-//     p<size_t> param; 
-// } ;
 
 struct alignas(64) announce {
     p<size_t> val;

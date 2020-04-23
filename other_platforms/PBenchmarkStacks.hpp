@@ -95,6 +95,7 @@ public:
      */
     template<typename STACK, typename PTM>
     uint64_t pushPop(std::string& className, const long numPairs, const int numRuns) {
+        cout << "in push pop" << endl;
         nanoseconds deltas[numThreads][numRuns];
         atomic<bool> startFlag = { false };
         STACK* stack = nullptr;
