@@ -20,10 +20,10 @@
 #define DATA_FILE "data/pstack-ll-romlr.txt"
 #elif defined USE_ROM_LOG_FC
 #include "romulus/RomLogFC.hpp"
-#define DATA_FILE "data/pstack-ll-romlogfc.txt"
+#define DATA_FILE "../data/pstack-ll-romlogfc.txt"
 #elif defined USE_OFWF
 #include "one_file/OneFilePTMWF.hpp"
-#define DATA_FILE "data/pstack-ll-ofwf.txt"
+#define DATA_FILE "../data/pstack-ll-ofwf.txt"
 #endif
 
 #ifndef DATA_FILE
