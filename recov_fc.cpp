@@ -18,9 +18,24 @@
 
 using namespace pmem;
 using namespace pmem::obj;
+using namespace std::chrono;
+using namespace std::literals::chrono_literals;
 
-#define N 32  // number of processes
-#define MAX_POOL_SIZE 100  // number of nodes in the pool
+#ifndef DATA_FILE
+#define DATA_FILE "data/pstack-ll-rfc.txt"
+#endif
+#ifndef PM_REGION_SIZE
+#define PM_REGION_SIZE 1024*1024*1024ULL // 1GB for now
+// #define PM_REGION_SIZE 1024*1024*128ULL 
+#endif
+// Name of persistent file mapping
+#ifndef PM_FILE_NAME
+// #define PM_FILE_NAME   "/home/matanr/recov_flat_combining/poolfile"
+#define PM_FILE_NAME   "/dev/shm/rfc_shared"
+#endif
+
+#define N 40  // number of processes
+#define MAX_POOL_SIZE 700  // number of nodes in the pool
 #define ACK -1
 #define EMPTY -2
 #define NONE -3
@@ -210,11 +225,11 @@ int find_free_node(persistent_ptr<recoverable_fc> rfc, int current_index=0) {
 size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::pool<root> pop, size_t pid)
 {
 	std::list<size_t> l = reduce(rfc);
-	std::cout << "Combiner reduced:";
-	for (auto v : l) {
-		std::cout << " " << v;
-	}
-	std::cout << ", opEpoch is: " << opEpoch << std::endl;
+	// std::cout << "Combiner reduced:";
+	// for (auto v : l) {
+	// 	std::cout << " " << v;
+	// }
+	// std::cout << ", opEpoch is: " << opEpoch << std::endl;
 	if (!l.empty()) {
 		size_t cId = l.front();
 		size_t cOp = rfc->announce_arr[cId]->name;
@@ -270,7 +285,7 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 	rfc->cEpoch = rfc->cEpoch + 1;
 	pmem_flush(&rfc->cEpoch, sizeof(&rfc->cEpoch)); 
 	pmem_drain();
-	std::cout << "Combiner updated cEpoch to " << rfc->cEpoch << std::endl;
+	// std::cout << "Combiner updated cEpoch to " << rfc->cEpoch << std::endl;
 	bool expected = true;
 	bool combiner = cLock.compare_exchange_strong(expected, false, std::memory_order_release, std::memory_order_relaxed);
 	size_t value =  try_to_return(rfc, opEpoch, pid);
@@ -297,13 +312,11 @@ size_t op(persistent_ptr<recoverable_fc> rfc, pmem::obj::pool<root> pop, size_t 
 	pmem_drain(); // SFENCE
 	rfc->announce_arr[pid]->valid = true;
 
-
-
 	size_t value = try_to_take_lock(rfc, opEpoch, pid);
 	if (value != NONE){
 		return value;
 	}
-	std::cout << "~~~ Combiner is: " << pid << " ~~~" << std::endl;
+	// std::cout << "~~~ Combiner is: " << pid << " ~~~" << std::endl;
 	return combine(rfc, opEpoch, pop, pid);
 }
 
@@ -337,64 +350,196 @@ inline bool is_file_exists (const char* name) {
   return (stat (name, &buffer) == 0); 
 }
 
+/**
+ * enqueue-dequeue pairs: in each iteration a thread executes an enqueue followed by a dequeue;
+ * the benchmark executes 10^8 pairs partitioned evenly among all threads;
+ */
+uint64_t pushPopTest(pmem::obj::pool<root> pop, pmem::obj::persistent_ptr<root> proot, int numThreads, const long numPairs, const int numRuns) {
+	const uint64_t kNumElements = 0; // Number of initial items in the stack
+	static const long long NSEC_IN_SEC = 1000000000LL;
+	
+	// pmem::obj::pool<root> pop;
+	// pmem::obj::persistent_ptr<root> proot;
+
+	// const char* pool_file_name = "poolfile";
+	const char* pool_file_name = PM_FILE_NAME;
+    size_t params [N];
+    size_t ops [N];
+    std::thread threads_pool[N];
+
+	std::cout << "in push pop" << std::endl;
+	nanoseconds deltas[numThreads][numRuns];
+	std::atomic<bool> startFlag = { false };
+
+	std::cout << "##### " << "Recoverable FC" << " #####  \n";
+
+	auto pushpop_lambda = [&numThreads, &startFlag,&numPairs, &proot, &pop](nanoseconds *delta, const int tid) {
+		//UserData* ud = new UserData{0,0};
+		size_t param = 42;
+		while (!startFlag.load()) {} // Spin until the startFlag is set
+		// Measurement phase
+		auto startBeats = steady_clock::now();
+		for (long long iter = 0; iter < numPairs/numThreads; iter++) {
+			op(proot->rfc, pop, tid, PUSH_OP, param);
+			if (op(proot->rfc, pop, tid, POP_OP, NONE) == EMPTY) std::cout << "Error at measurement pop() iter=" << iter << "\n";
+		}
+		auto stopBeats = steady_clock::now();
+		*delta = stopBeats - startBeats;
+	};
+
+	for (int irun = 0; irun < numRuns; irun++) {
+		// currently, for each run there is one poolfile. therefore, only one run is supported
+
+		// Fill the queue with an initial amount of nodes
+		size_t param = size_t(41);
+		for (uint64_t ielem = 0; ielem < kNumElements; ielem++) {
+			op(proot->rfc, pop, 0, PUSH_OP, param);
+		}
+		std::thread enqdeqThreads[numThreads];
+		// threads_pool[tid] = std::thread (op, proot->rfc, pop, tid, PUSH_OP, params[tid]);
+		// threads_pool[tid] = std::thread (op, proot->rfc, pop, tid, POP_OP, params[tid]);
+		for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = std::thread(pushpop_lambda, &deltas[tid][irun], tid);
+		startFlag.store(true);
+		// Sleep for 2 seconds just to let the threads see the startFlag
+		std::this_thread::sleep_for(2s);
+		for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid].join();
+		startFlag.store(false);
+		// should delete poolfile afterwards here
+	}
+
+	// Sum up all the time deltas of all threads so we can find the median run
+	std::vector<nanoseconds> agg(numRuns);
+	for (int irun = 0; irun < numRuns; irun++) {
+		agg[irun] = 0ns;
+		for (int tid = 0; tid < numThreads; tid++) {
+			agg[irun] += deltas[tid][irun];
+		}
+	}
+
+	// Compute the median. numRuns should be an odd number
+	sort(agg.begin(),agg.end());
+	auto median = agg[numRuns/2].count()/numThreads; // Normalize back to per-thread time (mean of time for this run)
+
+	std::cout << "Total Ops/sec = " << numPairs*2*NSEC_IN_SEC/median << "\n";
+	return (numPairs*2*NSEC_IN_SEC/median);
+}
+
+
+#define MILLION  1000000LL
+
+int runSeveralTests(pmem::obj::pool<root> pop, pmem::obj::persistent_ptr<root> proot) {
+    const std::string dataFilename { DATA_FILE };
+    std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 24, 32, 40 };     // For Castor
+    const int numRuns = 1;                                           // Number of runs
+    const long numPairs = 1*MILLION;                                 // 1M is fast enough on the laptop
+
+    uint64_t results[threadList.size()];
+    std::string cName;
+    // Reset results
+    std::memset(results, 0, sizeof(uint64_t)*threadList.size());
+
+    // Enq-Deq Throughput benchmarks
+    for (int it = 0; it < threadList.size(); it++) {
+        int nThreads = threadList[it];
+        std::cout << "\n----- pstack-ll (push-pop)   threads=" << nThreads << "   pairs=" << numPairs/MILLION << "M   runs=" << numRuns << " -----\n";
+		results[it] = pushPopTest(pop, proot, nThreads, numPairs, numRuns);
+    }
+
+    // Export tab-separated values to a file to be imported in gnuplot or excel
+    std::ofstream dataFile;
+    dataFile.open(dataFilename);
+    dataFile << "Threads\t";
+    // Printf class names for each column
+    dataFile << cName << "\t";
+    dataFile << "\n";
+    for (int it = 0; it < threadList.size(); it++) {
+        dataFile << threadList[it] << "\t";
+        dataFile << results[it] << "\t";
+        dataFile << "\n";
+    }
+    dataFile.close();
+    std::cout << "\nSuccessfuly saved results in " << dataFilename << "\n";
+
+    return 0;
+}
+
+
 
 int main(int argc, char *argv[]) {
 	pmem::obj::pool<root> pop;
 	pmem::obj::persistent_ptr<root> proot;
 
-	const char* pool_file_name = "poolfile";
-    size_t params [N];
-    size_t ops [N];
-    std::thread threads_pool[N];
-
-    for (int pid=0; pid<N; pid++) {
-            if (pid % 3 == 1) {
-                params[pid] = NONE;
-                ops[pid] = POP_OP;
-            }
-            else {
-                params[pid] = pid;
-                ops[pid] = PUSH_OP;
-            }
-        }
-
+	const char* pool_file_name = PM_FILE_NAME;
 	if (is_file_exists(pool_file_name)) {
-		// open a pmemobj pool
-		pop = pool<root>::open(pool_file_name, "layout");
-		proot = pop.root();
-
-        for (int pid=0; pid<N; pid++) {
-            threads_pool[pid] = std::thread (recover, proot->rfc, pop, pid, ops[pid], params[pid]);
-        }							      
-		for (int pid=0; pid<N; pid++) {
-			threads_pool[pid].join();
+			// open a pmemobj pool
+			pop = pool<root>::open(pool_file_name, "layout");
+			proot = pop.root();
 		}
-		print_state(proot->rfc);
-		
-		
-		for (int pid=0; pid<N; pid++) {
-            threads_pool[pid] = std::thread (op, proot->rfc, pop, pid, ops[pid], params[pid]);
-        }							      
-		for (int pid=0; pid<N; pid++) {
-			threads_pool[pid].join();
-		}
-		print_state(proot->rfc);
-	}
-	else {
+		else {
 		// create a pmemobj pool
-		pop = pool<root>::create(pool_file_name, "layout", PMEMOBJ_MIN_POOL);
-		proot = pop.root();
-		transaction_allocations(proot, pop);
-		std::cout << "Finished allocating!" << std::endl;
-		
-		for (int pid=0; pid<N; pid++) {
-            threads_pool[pid] = std::thread (op, proot->rfc, pop, pid, ops[pid], params[pid]);
-        }
-		// usleep(1);
-		kill(getpid(), SIGKILL);
-		for (int pid=0; pid<N; pid++) {
-			threads_pool[pid].join();
+			// pop = pool<root>::create(pool_file_name, "layout", PMEMOBJ_MIN_POOL);
+			pop = pool<root>::create(pool_file_name, "layout", PM_REGION_SIZE);
+			proot = pop.root();
+			transaction_allocations(proot, pop);
+			std::cout << "Finished allocating!" << std::endl;
 		}
-		print_state(proot->rfc);
-	}
+	runSeveralTests(pop, proot);
+	// pmem::obj::pool<root> pop;
+	// pmem::obj::persistent_ptr<root> proot;
+
+	// const char* pool_file_name = "poolfile";
+    // size_t params [N];
+    // size_t ops [N];
+    // std::thread threads_pool[N];
+
+    // for (int pid=0; pid<N; pid++) {
+    //         if (pid % 3 == 1) {
+    //             params[pid] = NONE;
+    //             ops[pid] = POP_OP;
+    //         }
+    //         else {
+    //             params[pid] = pid;
+    //             ops[pid] = PUSH_OP;
+    //         }
+    //     }
+
+	// if (is_file_exists(pool_file_name)) {
+	// 	// open a pmemobj pool
+	// 	pop = pool<root>::open(pool_file_name, "layout");
+	// 	proot = pop.root();
+
+    //     for (int pid=0; pid<N; pid++) {
+    //         threads_pool[pid] = std::thread (recover, proot->rfc, pop, pid, ops[pid], params[pid]);
+    //     }							      
+	// 	for (int pid=0; pid<N; pid++) {
+	// 		threads_pool[pid].join();
+	// 	}
+	// 	print_state(proot->rfc);
+		
+		
+	// 	for (int pid=0; pid<N; pid++) {
+    //         threads_pool[pid] = std::thread (op, proot->rfc, pop, pid, ops[pid], params[pid]);
+    //     }							      
+	// 	for (int pid=0; pid<N; pid++) {
+	// 		threads_pool[pid].join();
+	// 	}
+	// 	print_state(proot->rfc);
+	// }
+	// else {
+	// 	// create a pmemobj pool
+	// 	pop = pool<root>::create(pool_file_name, "layout", PMEMOBJ_MIN_POOL);
+	// 	proot = pop.root();
+	// 	transaction_allocations(proot, pop);
+	// 	std::cout << "Finished allocating!" << std::endl;
+		
+	// 	for (int pid=0; pid<N; pid++) {
+    //         threads_pool[pid] = std::thread (op, proot->rfc, pop, pid, ops[pid], params[pid]);
+    //     }
+	// 	// usleep(1);
+	// 	kill(getpid(), SIGKILL);
+	// 	for (int pid=0; pid<N; pid++) {
+	// 		threads_pool[pid].join();
+	// 	}
+	// 	print_state(proot->rfc);
+	// }
 }

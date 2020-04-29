@@ -34,7 +34,6 @@
 #define MILLION  1000000LL
 
 int main(void) {
-    std::cout << "in pstack main" << std::endl;
     const std::string dataFilename { DATA_FILE };
     vector<int> threadList = { 1, 2, 4, 8, 10, 16, 24, 32, 40 };     // For Castor
     const int numRuns = 1;                                           // Number of runs
@@ -42,10 +41,8 @@ int main(void) {
 
     uint64_t results[threadList.size()];
     std::string cName;
-    std::cout << "before memset" << std::endl;
     // Reset results
     std::memset(results, 0, sizeof(uint64_t)*threadList.size());
-    std::cout << "after memset" << std::endl;
 
     // Enq-Deq Throughput benchmarks
     for (int it = 0; it < threadList.size(); it++) {

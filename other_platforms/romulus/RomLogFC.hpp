@@ -72,12 +72,13 @@ namespace romlogfc {
 #endif
 // Size of the persistent memory region
 #ifndef PM_REGION_SIZE
-// #define PM_REGION_SIZE 1024*1024*1024ULL // 1GB for now
-#define PM_REGION_SIZE 1024*1024*128ULL 
+#define PM_REGION_SIZE 1024*1024*1024ULL // 1GB for now
+// #define PM_REGION_SIZE 1024*1024*128ULL 
 #endif
 // Name of persistent file mapping
 #ifndef PM_FILE_NAME
-#define PM_FILE_NAME   "/home/matanr/recov_flat_combining/other_platforms/shm/romlogfc_shared"
+// #define PM_FILE_NAME   "/home/matanr/recov_flat_combining/other_platforms/shm/romlogfc_shared"
+#define PM_FILE_NAME   "/dev/shm/romlogfc_shared"
 #endif
 
 // Maximum number of registered threads that can execute transactions
@@ -602,7 +603,6 @@ public:
     static std::string className() { return "RomLog-FC"; }
 
     void mapPersistentRegion(const char* filename, uint8_t* regionAddr, const uint64_t regionSize) {
-        std::cout<< filename << std::endl;
         // Check that the header with the logs leaves at least half the memory available to the user
         if (sizeof(PMetadata) > regionSize/2) {
             printf("ERROR: the size of the logs in persistent memory is so large that it takes more than half the whole persistent memory\n");
@@ -627,14 +627,13 @@ public:
                 perror("write() error");
             }
         }
-        std::cout << "pfd: " << pfd << std::endl;
         // Try one time to mmap() with DAX. If it fails due to MAP_FAILED, then retry without DAX.
         // We may fail because the address is not available. Retry at most 4 times, then give up.
         uint64_t dax_flag = MAP_SYNC;
         void* got_addr = NULL;
         for (int i = 0; i < 4; i++) {
-            got_addr = mmap(regionAddr, regionSize, (PROT_READ | PROT_WRITE), MAP_SHARED_VALIDATE | dax_flag, pfd, 0);
-            // got_addr = mmap(NULL, regionSize, (PROT_READ | PROT_WRITE), MAP_SHARED_VALIDATE | dax_flag, pfd, 0);
+            // got_addr = mmap(regionAddr, regionSize, (PROT_READ | PROT_WRITE), MAP_SHARED_VALIDATE | dax_flag, pfd, 0);
+            got_addr = mmap(regionAddr, regionSize, (PROT_READ | PROT_WRITE), MAP_SHARED, pfd, 0);
             if (got_addr == regionAddr) {
             // if (got_addr == NULL) {
                 if (dax_flag == 0) printf("WARNING: running without DAX enabled\n");
