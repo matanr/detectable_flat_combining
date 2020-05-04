@@ -22,7 +22,7 @@ using namespace std::chrono;
 using namespace std::literals::chrono_literals;
 
 #ifndef DATA_FILE
-#define DATA_FILE "data/pstack-ll-rfc.txt"
+#define DATA_FILE "other_platforms/data/pstack-ll-rfc.txt"
 #endif
 #ifndef PM_REGION_SIZE
 #define PM_REGION_SIZE 1024*1024*1024ULL // 1GB for now
@@ -301,8 +301,8 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 				}
 				else {
                     rfc->announce_arr[cId]->val = head->param;
+					head->is_free = true;
 				}
-				head->is_free = true;
                 head = head->next;
 				l.pop_front();
 				cId = l.front();
