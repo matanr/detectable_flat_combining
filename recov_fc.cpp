@@ -42,6 +42,45 @@ using namespace std::literals::chrono_literals;
 #define PUSH_OP -4
 #define POP_OP -5
 
+
+// Macros needed for persistence
+#ifdef PWB_IS_CLFLUSH_PFENCE_NOP
+  /*
+   * More info at http://elixir.free-electrons.com/linux/latest/source/arch/x86/include/asm/special_insns.h#L213
+   * Intel programming manual at https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-optimization-manual.pdf
+   * Use these for Broadwell CPUs (cervino server)
+   */
+  #define PWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory")                      // Broadwell only works with this.
+  #define PFENCE()               {}                                                                             // No ordering fences needed for CLFLUSH (section 7.4.6 of Intel manual)
+  #define PSYNC()                {}                                                                             // For durability it's not obvious, but CLFLUSH seems to be enough, and PMDK uses the same approach
+#elif PWB_IS_CLFLUSH
+  #define PWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory")
+  #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
+  #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
+#elif PWB_IS_CLWB
+  /* Use this for CPUs that support clwb, such as the SkyLake SP series (c5 compute intensive instances in AWS are an example of it) */
+  #define PWB(addr)              __asm__ volatile(".byte 0x66; xsaveopt %0" : "+m" (*(volatile char *)(addr)))  // clwb() only for Ice Lake onwards
+  #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
+  #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
+#elif PWB_IS_NOP
+  /* pwbs are not needed for shared memory persistency (i.e. persistency across process failure) */
+  #define PWB(addr)              {}
+  #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
+  #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
+#elif PWB_IS_CLFLUSHOPT
+  /* Use this for CPUs that support clflushopt, which is most recent x86 */
+  #define PWB(addr)              __asm__ volatile(".byte 0x66; clflush %0" : "+m" (*(volatile char *)(addr)))    // clflushopt (Kaby Lake)
+  #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
+  #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
+#elif PWB_IS_PMEM
+  #define PWB(addr)              pmem_flush(addr, sizeof(addr))
+  #define PFENCE()               pmem_drain()
+  #define PSYNC() 				 {}
+#else
+#error "You must define what PWB is. Choose PWB_IS_CLFLUSHOPT if you don't know what your CPU is capable of"
+#endif
+
+
 std::atomic<bool> cLock {false};    // holds true when locked, holds false when unlocked
 bool garbage_collected = false;
 
@@ -154,8 +193,8 @@ std::list<size_t> reduce(persistent_ptr<recoverable_fc> rfc) {
 	if (rfc->cEpoch%2 == 1) {
 		rfc->cEpoch = rfc->cEpoch + 1;
 	}
-	pmem_flush(&rfc->cEpoch, sizeof(&rfc->cEpoch)); 
-	pmem_drain();
+	PWB(&rfc->cEpoch); // pmem_flush(&rfc->cEpoch, sizeof(&rfc->cEpoch)); 
+	PFENCE();  // pmem_drain();
 	for (size_t i = 0; i < N; i++) {
 		if (rfc->announce_arr[i] == NULL) {
 			continue;
@@ -173,10 +212,10 @@ std::list<size_t> reduce(persistent_ptr<recoverable_fc> rfc) {
 			else if (opName == POP_OP) {
 				popList.push_back(i);
 			}
-			pmem_flush(&rfc->announce_arr[i], sizeof(&rfc->announce_arr[i])); 
+			PWB(&rfc->announce_arr[i]);  // pmem_flush(&rfc->announce_arr[i], sizeof(&rfc->announce_arr[i])); 
 		}
 	}
-	pmem_drain();
+	PFENCE();  // pmem_drain();
 	while((!pushList.empty()) || (!popList.empty())) {
 		auto cPush = pushList.front();
 		auto cPop = popList.front();
@@ -249,7 +288,7 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 				newNode->is_free = false;
                 rfc->announce_arr[cId]->val = ACK;
 				head = newNode;
-				pmem_flush(&newNode, sizeof(&newNode));  // CLWB
+				PWB(&newNode);  // pmem_flush(&newNode, sizeof(&newNode));  // CLWB
 				l.pop_front();
 				cId = l.front();
 			} while (!l.empty());
@@ -275,16 +314,16 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
         rfc->top[(opEpoch/2 + 1) % 2] = rfc->top[(opEpoch/2) % 2];
     }
 	for (int i=0;i<N;i++) {
-		pmem_flush(&rfc->announce_arr[pid], sizeof(&rfc->announce_arr[pid]));  // CLWB	
+		PWB(&rfc->announce_arr[pid]);  // pmem_flush(&rfc->announce_arr[pid], sizeof(&rfc->announce_arr[pid]));  // CLWB	
 	}
-	pmem_flush(&rfc->top[(opEpoch/2 + 1) % 2], sizeof(&rfc->top[(opEpoch/2 + 1) % 2]));  // CLWB
-	pmem_drain(); // SFENCE
+	PWB(&rfc->top[(opEpoch/2 + 1) % 2]); // pmem_flush(&rfc->top[(opEpoch/2 + 1) % 2], sizeof(&rfc->top[(opEpoch/2 + 1) % 2]));  // CLWB
+	PFENCE();  // pmem_drain(); // SFENCE
 	rfc->cEpoch = rfc->cEpoch + 1;
-	pmem_flush(&rfc->cEpoch, sizeof(&rfc->cEpoch)); // CLWB
-	pmem_drain(); // SFENCE
+	PWB(&rfc->cEpoch);  // pmem_flush(&rfc->cEpoch, sizeof(&rfc->cEpoch)); // CLWB
+	PFENCE();  // pmem_drain(); // SFENCE
 	rfc->cEpoch = rfc->cEpoch + 1;
-	pmem_flush(&rfc->cEpoch, sizeof(&rfc->cEpoch)); 
-	pmem_drain();
+	PWB(&rfc->cEpoch);  // pmem_flush(&rfc->cEpoch, sizeof(&rfc->cEpoch)); 
+	PFENCE();  // pmem_drain();
 	// std::cout << "Combiner updated cEpoch to " << rfc->cEpoch << std::endl;
 	bool expected = true;
 	bool combiner = cLock.compare_exchange_strong(expected, false, std::memory_order_release, std::memory_order_relaxed);
@@ -302,14 +341,14 @@ size_t op(persistent_ptr<recoverable_fc> rfc, pmem::obj::pool<root> pop, size_t 
 
 	// announce
 	rfc->announce_arr[pid]->valid = false;
-	pmem_flush(&rfc->announce_arr[pid]->valid, sizeof(&rfc->announce_arr[pid]->valid)); // CLWB
-	pmem_drain(); // SFENCE
+	PWB(&rfc->announce_arr[pid]->valid);  // pmem_flush(&rfc->announce_arr[pid]->valid, sizeof(&rfc->announce_arr[pid]->valid)); // CLWB
+	PFENCE();  // pmem_drain(); // SFENCE
     rfc->announce_arr[pid]->val = NONE;
 	rfc->announce_arr[pid]->epoch = opEpoch;
 	rfc->announce_arr[pid]->param = param;
     rfc->announce_arr[pid]->name = opName;
-	pmem_flush(&rfc->announce_arr[pid], sizeof(&rfc->announce_arr[pid])); // CLWB
-	pmem_drain(); // SFENCE
+	PWB(&rfc->announce_arr[pid]);  // pmem_flush(&rfc->announce_arr[pid], sizeof(&rfc->announce_arr[pid])); // CLWB
+	PFENCE();  // pmem_drain(); // SFENCE
 	rfc->announce_arr[pid]->valid = true;
 
 	size_t value = try_to_take_lock(rfc, opEpoch, pid);

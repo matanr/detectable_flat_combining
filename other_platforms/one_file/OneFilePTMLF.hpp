@@ -22,18 +22,29 @@
 #include <fcntl.h>
 #include <unistd.h>     // Needed by close()
 
-// Please keep this file in sync (as much as possible) with stms/OneFileLF.hpp
+#include <libpmem.h>
+
+/*
+ * <h1> Romulus Log </h1>
+ * This is a special version of Romulus Log that is meant for comparing in the sequential SPS.
+ * It is a single file (this one) and uses the EsLoco allocator
+ */
+
 
 // Macros needed for persistence
-#ifdef PWB_IS_CLFLUSH
+#ifdef PWB_IS_CLFLUSH_PFENCE_NOP
   /*
    * More info at http://elixir.free-electrons.com/linux/latest/source/arch/x86/include/asm/special_insns.h#L213
    * Intel programming manual at https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-optimization-manual.pdf
    * Use these for Broadwell CPUs (cervino server)
    */
-  #define PWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory")                  // Broadwell only works with this.
-  #define PFENCE()               {}                                                                         // No ordering fences needed for CLFLUSH (section 7.4.6 of Intel manual)
-  #define PSYNC()                {}                                                                         // For durability it's not obvious, but CLFLUSH seems to be enough, and PMDK uses the same approach
+  #define PWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory")                      // Broadwell only works with this.
+  #define PFENCE()               {}                                                                             // No ordering fences needed for CLFLUSH (section 7.4.6 of Intel manual)
+  #define PSYNC()                {}                                                                             // For durability it's not obvious, but CLFLUSH seems to be enough, and PMDK uses the same approach
+#elif PWB_IS_CLFLUSH
+  #define PWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory")
+  #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
+  #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
 #elif PWB_IS_CLWB
   /* Use this for CPUs that support clwb, such as the SkyLake SP series (c5 compute intensive instances in AWS are an example of it) */
   #define PWB(addr)              __asm__ volatile(".byte 0x66; xsaveopt %0" : "+m" (*(volatile char *)(addr)))  // clwb() only for Ice Lake onwards
@@ -49,9 +60,44 @@
   #define PWB(addr)              __asm__ volatile(".byte 0x66; clflush %0" : "+m" (*(volatile char *)(addr)))    // clflushopt (Kaby Lake)
   #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
   #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
+#elif PWB_IS_PMEM
+  #define PWB(addr)              pmem_flush(addr, sizeof(addr))
+  #define PFENCE()               pmem_drain()
+  #define PSYNC() 				 {}
 #else
 #error "You must define what PWB is. Choose PWB_IS_CLFLUSHOPT if you don't know what your CPU is capable of"
 #endif
+
+// Please keep this file in sync (as much as possible) with stms/OneFileLF.hpp
+
+// // Macros needed for persistence
+// #ifdef PWB_IS_CLFLUSH
+//   /*
+//    * More info at http://elixir.free-electrons.com/linux/latest/source/arch/x86/include/asm/special_insns.h#L213
+//    * Intel programming manual at https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-optimization-manual.pdf
+//    * Use these for Broadwell CPUs (cervino server)
+//    */
+//   #define PWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory")                  // Broadwell only works with this.
+//   #define PFENCE()               {}                                                                         // No ordering fences needed for CLFLUSH (section 7.4.6 of Intel manual)
+//   #define PSYNC()                {}                                                                         // For durability it's not obvious, but CLFLUSH seems to be enough, and PMDK uses the same approach
+// #elif PWB_IS_CLWB
+//   /* Use this for CPUs that support clwb, such as the SkyLake SP series (c5 compute intensive instances in AWS are an example of it) */
+//   #define PWB(addr)              __asm__ volatile(".byte 0x66; xsaveopt %0" : "+m" (*(volatile char *)(addr)))  // clwb() only for Ice Lake onwards
+//   #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
+//   #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
+// #elif PWB_IS_NOP
+//   /* pwbs are not needed for shared memory persistency (i.e. persistency across process failure) */
+//   #define PWB(addr)              {}
+//   #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
+//   #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
+// #elif PWB_IS_CLFLUSHOPT
+//   /* Use this for CPUs that support clflushopt, which is most recent x86 */
+//   #define PWB(addr)              __asm__ volatile(".byte 0x66; clflush %0" : "+m" (*(volatile char *)(addr)))    // clflushopt (Kaby Lake)
+//   #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
+//   #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
+// #else
+// #error "You must define what PWB is. Choose PWB_IS_CLFLUSHOPT if you don't know what your CPU is capable of"
+// #endif
 
 
 /*

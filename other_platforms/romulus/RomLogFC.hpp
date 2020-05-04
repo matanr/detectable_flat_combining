@@ -22,6 +22,8 @@
 #include <unistd.h>     // Needed by close()
 #include <type_traits>
 
+#include <libpmem.h>
+
 /*
  * <h1> Romulus Log </h1>
  * This is a special version of Romulus Log that is meant for comparing in the sequential SPS.
@@ -30,7 +32,7 @@
 
 
 // Macros needed for persistence
-#ifdef PWB_IS_CLFLUSH
+#ifdef PWB_IS_CLFLUSH_PFENCE_NOP
   /*
    * More info at http://elixir.free-electrons.com/linux/latest/source/arch/x86/include/asm/special_insns.h#L213
    * Intel programming manual at https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-optimization-manual.pdf
@@ -39,6 +41,10 @@
   #define PWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory")                      // Broadwell only works with this.
   #define PFENCE()               {}                                                                             // No ordering fences needed for CLFLUSH (section 7.4.6 of Intel manual)
   #define PSYNC()                {}                                                                             // For durability it's not obvious, but CLFLUSH seems to be enough, and PMDK uses the same approach
+#elif PWB_IS_CLFLUSH
+  #define PWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory")
+  #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
+  #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
 #elif PWB_IS_CLWB
   /* Use this for CPUs that support clwb, such as the SkyLake SP series (c5 compute intensive instances in AWS are an example of it) */
   #define PWB(addr)              __asm__ volatile(".byte 0x66; xsaveopt %0" : "+m" (*(volatile char *)(addr)))  // clwb() only for Ice Lake onwards
@@ -54,6 +60,10 @@
   #define PWB(addr)              __asm__ volatile(".byte 0x66; clflush %0" : "+m" (*(volatile char *)(addr)))    // clflushopt (Kaby Lake)
   #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
   #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
+#elif PWB_IS_PMEM
+  #define PWB(addr)              pmem_flush(addr, sizeof(addr))
+  #define PFENCE()               pmem_drain()
+  #define PSYNC() 				 {}
 #else
 #error "You must define what PWB is. Choose PWB_IS_CLFLUSHOPT if you don't know what your CPU is capable of"
 #endif
@@ -675,7 +685,10 @@ public:
         tl_nested_write_trans++;
         if (tl_nested_write_trans > 1) return;
         pmd->state = MUTATING;
-        PWB(&pmd->state);
+
+        uint64_t* ptr = (uint64_t*)(& pmd->state);
+        PWB(ptr);
+        // PWB(&pmd->state);
         PFENCE();
     }
 
@@ -686,7 +699,9 @@ public:
         appendLog.flushStores(0);
         PFENCE();
         pmd->state = COPYING;
-        PWB(&pmd->state);
+        uint64_t* ptr = (uint64_t*)(& pmd->state);
+        PWB(ptr);
+        // PWB(&pmd->state);
         PSYNC();
         appendLog.applyStores(PBACK_ADDR-PMAIN_ADDR);
         appendLog.flushStores(PBACK_ADDR-PMAIN_ADDR);
@@ -708,7 +723,9 @@ public:
         }
         PFENCE();
         pmd->state = IDLE;
-        PWB(&pmd->state);
+        uint64_t* ptr = (uint64_t*)(& pmd->state);
+        PWB(ptr);
+        // PWB(&pmd->state);
         PSYNC();
     }
 

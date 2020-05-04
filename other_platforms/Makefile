@@ -1,6 +1,8 @@
 CXX = g++  #-8
+# CXX = icpc  #-8
 # CXXFLAGS = -std=c++14 -g -O2 -DPWB_IS_CLFLUSHOPT
-CXXFLAGS = -std=c++14 -g -O2 -DPWB_IS_CLFLUSH
+# CXXFLAGS = -std=c++14 -g -O2 -DPWB_IS_CLFLUSH
+CXXFLAGS = -std=c++14 -g -O2 -DPWB_IS_PMEM
 # CXXFLAGS = -std=c++14 -g -O2 -DPWB_IS_NOP
 # Use these options for castor-1 (Optane DC PM):
 #CXXFLAGS = -std=c++14 -g -O2 -DPWB_IS_CLWB -DPM_REGION_SIZE=4*1024*1024*1024ULL -DPM_FILE_NAME="\"/mnt/pmem0/durable\""    
@@ -14,14 +16,17 @@ CXXFLAGS = -std=c++14 -g -O2 -DPWB_IS_CLFLUSH
 INCLUDES = -I../
 
 # This library is needed for PMDK
-PMDKLIBS=-I/home/matanr/nvram/libpmemobj-cpp/include/ -L/usr/local/lib -lpmemobj
+# PMDKLIBS=-I/home/matanr/nvram/libpmemobj-cpp/include/ -L/usr/local/lib -lpmemobj
+PMDKFLAGS=`pkg-config --cflags libpmemobj++`
+PMDKLIBS=`pkg-config --libs libpmemobj++`
+# PMDKLIBS=-I/home/matanr/nvram/libpmemobj-cpp/include/opt/sw/pmdk/pmdk-1.8_install/include -L/usr/local/lib -lpmemobj
 
 
 # PTMs for which we want to build concurrent benchmarks
 CONC_PTM_NAMES := \
 	bin-romlogfc \
 	bin-oflf \
-	# bin-pmdk \
+	bin-pmdk \
 	
 	
 BINARIES_SEQ = \
@@ -46,15 +51,17 @@ persistencyclean:
 	rm -f /dev/shm/pmdk_shared_friedman	
 
 
+
+
 #
 # Multithreaded stack (linked list)
 #
 bin/pstack-ll-romlogfc: pstack-ll.cpp PBenchmarkStacks.hpp TMLinkedListStackByRef.hpp romulus/RomLogFC.hpp
-	$(CXX) $(CXXFLAGS) -DUSE_ROM_LOG_FC $(INCLUDES) pstack-ll.cpp -o bin/pstack-ll-romlogfc -lpthread
+	$(CXX) $(CXXFLAGS) -DUSE_ROM_LOG_FC $(PMDKFLAGS) $(PMDKLIBS) $(INCLUDES) pstack-ll.cpp -o bin/pstack-ll-romlogfc -lpthread -lpmem
 
-# bin/pstack-ll-pmdk: pstack-ll.cpp PBenchmarkStacks.hpp TMLinkedListStackByRef.hpp pmdk/PMDKTM.hpp
-# 	$(CXX) $(CXXFLAGS) -DUSE_PMDK $(INCLUDES) pstack-ll.cpp -o bin/pstack-ll-pmdk -lpthread -lpmemobj
+bin/pstack-ll-pmdk: pstack-ll.cpp PBenchmarkStacks.hpp TMLinkedListStackByRef.hpp pmdk/PMDKTM.hpp
+	$(CXX) $(CXXFLAGS) -DUSE_PMDK $(INCLUDES) $(PMDKLIBS) pstack-ll.cpp -o bin/pstack-ll-pmdk -lpthread -lpmemobj
 
 bin/pstack-ll-oflf: pstack-ll.cpp PBenchmarkStacks.hpp TMLinkedListStackByRef.hpp one_file/OneFilePTMLF.hpp
-	$(CXX) $(CXXFLAGS) -DUSE_OFLF $(INCLUDES) pstack-ll.cpp -o bin/pstack-ll-oflf -lpthread
+	$(CXX) $(CXXFLAGS) -DUSE_OFLF $(PMDKFLAGS) $(PMDKLIBS) $(INCLUDES) pstack-ll.cpp -o bin/pstack-ll-oflf -lpthread -lpmem
 
