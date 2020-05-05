@@ -302,8 +302,8 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 				else {
                     rfc->announce_arr[cId]->val = head->param;
 					head->is_free = true;
+					head = head->next;
 				}
-                head = head->next;
 				l.pop_front();
 				cId = l.front();
 			} while (!l.empty());
