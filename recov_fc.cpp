@@ -211,7 +211,7 @@ std::list<size_t> reduce(persistent_ptr<recoverable_fc> rfc) {
 	PWB(&rfc->cEpoch); // pmem_flush(&rfc->cEpoch, sizeof(&rfc->cEpoch)); 
 	pfenceCounter1 ++;
 	PFENCE();  // pmem_drain();
-	for (size_t i = 0; i < N; i++) {
+	for (size_t i = 0; i < NN; i++) {
 		if (rfc->announce_arr[i] == NULL) {
 			continue;
 		}
