@@ -35,6 +35,7 @@ using namespace std::literals::chrono_literals;
 #endif
 
 #define N 40  // number of processes
+int NN = 40;  // number of processes running now
 #define MAX_POOL_SIZE 40  // number of nodes in the pool
 #define ACK -1
 #define EMPTY -2
@@ -84,8 +85,8 @@ using namespace std::literals::chrono_literals;
 std::atomic<bool> cLock {false};    // holds true when locked, holds false when unlocked
 bool garbage_collected = false;
 
-int pwbCounter = 0;
-int pfenceCounter = 0;
+int pwbCounter = 0; int pwbCounter1=0; int pwbCounter2=0; int pwbCounter3=0; int pwbCounter4=0; int pwbCounter5=0; int pwbCounter6=0; int pwbCounter7=0; int pwbCounter8=0; int pwbCounter9=0; int pwbCounter10=0;
+int pfenceCounter = 0; int pfenceCounter1=0; int pfenceCounter2=0; int pfenceCounter3=0; int pfenceCounter4=0; int pfenceCounter5=0; int pfenceCounter6=0; int pfenceCounter7=0;
 
 struct alignas(64) announce {
     p<size_t> val;
@@ -206,9 +207,9 @@ std::list<size_t> reduce(persistent_ptr<recoverable_fc> rfc) {
 		rfc->cEpoch = rfc->cEpoch + 1;
 	}
 	// asm volatile("mfence" ::: "memory");
-	pwbCounter ++;
+	pwbCounter1 ++;
 	PWB(&rfc->cEpoch); // pmem_flush(&rfc->cEpoch, sizeof(&rfc->cEpoch)); 
-	pfenceCounter ++;
+	pfenceCounter1 ++;
 	PFENCE();  // pmem_drain();
 	for (size_t i = 0; i < N; i++) {
 		if (rfc->announce_arr[i] == NULL) {
@@ -232,11 +233,11 @@ std::list<size_t> reduce(persistent_ptr<recoverable_fc> rfc) {
 			// announce casted = (* rfc->announce_arr[i]); 
 			// announce * casted_ptr = &casted;
 			// PWB(casted_ptr);
-			pwbCounter ++;
+			pwbCounter2 ++;
 			PWB(&rfc->announce_arr[i]);  // pmem_flush(&rfc->announce_arr[i], sizeof(&rfc->announce_arr[i])); 
 		}
 	}
-	pfenceCounter ++;
+	pfenceCounter2 ++;
 	PFENCE();  // pmem_drain();
 	while((!pushList.empty()) || (!popList.empty())) {
 		auto cPush = pushList.front();
@@ -340,7 +341,7 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 				newNode->next = head;
 				newNode->is_free = false;
                 rfc->announce_arr[cId]->val = ACK;
-				pwbCounter ++;
+				pwbCounter3 ++;
 				PWB(&newNode);
 				// asm volatile("mfence" ::: "memory"); // memory reordering
 				head = newNode;
@@ -372,7 +373,7 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 					// node casted = (* head); 
 					// node * casted_ptr = &casted;
 					// PWB(casted_ptr);
-					pwbCounter ++;
+					pwbCounter4 ++;
 					PWB(&head);
 					// asm volatile("mfence" ::: "memory"); // memory reordering
 					head = head->next;
@@ -390,29 +391,29 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 		// asm volatile("mfence" ::: "memory"); // memory reordering
     }
 	// asm volatile("mfence" ::: "memory"); // memory reordering
-	for (int i=0;i<N;i++) {
+	for (int i=0;i<NN;i++) {
 		// announce casted = (* rfc->announce_arr[pid]); 
 		// announce * casted_ptr = &casted;
 		// PWB(casted_ptr);
-		pwbCounter ++;
+		pwbCounter5 ++;
 		PWB(&rfc->announce_arr[pid]);  // pmem_flush(&rfc->announce_arr[pid], sizeof(&rfc->announce_arr[pid]));  // CLWB	
 	}
 	// node casted = (* rfc->top[(opEpoch/2 + 1) % 2]); 
 	// node* casted_ptr = &casted;
 	// PWB(casted_ptr);
-	pwbCounter ++;
+	pwbCounter6 ++;
 	PWB(&rfc->top[(opEpoch/2 + 1) % 2]); // pmem_flush(&rfc->top[(opEpoch/2 + 1) % 2], sizeof(&rfc->top[(opEpoch/2 + 1) % 2]));  // CLWB
-	pfenceCounter ++;
+	pfenceCounter3 ++;
 	PFENCE();  // pmem_drain(); // SFENCE
 	rfc->cEpoch = rfc->cEpoch + 1;
-	pwbCounter ++;
+	pwbCounter7 ++;
 	PWB(&rfc->cEpoch);  // pmem_flush(&rfc->cEpoch, sizeof(&rfc->cEpoch)); // CLWB
-	pfenceCounter ++;
+	pfenceCounter4 ++;
 	PFENCE();  // pmem_drain(); // SFENCE
 	rfc->cEpoch = rfc->cEpoch + 1;
-	pwbCounter ++;
+	pwbCounter8 ++;
 	PWB(&rfc->cEpoch);  // pmem_flush(&rfc->cEpoch, sizeof(&rfc->cEpoch)); 
-	pfenceCounter ++;
+	pfenceCounter5 ++;
 	PFENCE();  // pmem_drain();
 	// asm volatile("mfence" ::: "memory"); // make sure cEpoch is updated
 	// std::cout << "Combiner updated cEpoch to " << rfc->cEpoch << std::endl;
@@ -434,9 +435,9 @@ size_t op(persistent_ptr<recoverable_fc> rfc, pmem::obj::pool<root> pop, size_t 
 	// asm volatile("mfence" ::: "memory");
 	// announce
 	rfc->announce_arr[pid]->valid = false;
-	pwbCounter ++;
+	pwbCounter9 ++;
 	PWB(&rfc->announce_arr[pid]->valid);  // pmem_flush(&rfc->announce_arr[pid]->valid, sizeof(&rfc->announce_arr[pid]->valid)); // CLWB
-	pfenceCounter ++;
+	pfenceCounter6 ++;
 	PFENCE();  // pmem_drain(); // SFENCE
     rfc->announce_arr[pid]->val = NONE;
 	rfc->announce_arr[pid]->epoch = opEpoch;
@@ -445,9 +446,9 @@ size_t op(persistent_ptr<recoverable_fc> rfc, pmem::obj::pool<root> pop, size_t 
 	// announce casted = (* rfc->announce_arr[pid]); 
 	// announce * casted_ptr = &casted;
 	// PWB(casted_ptr);
-	pwbCounter ++;
+	pwbCounter10 ++;
 	PWB(&rfc->announce_arr[pid]);  // pmem_flush(&rfc->announce_arr[pid], sizeof(&rfc->announce_arr[pid])); // CLWB
-	pfenceCounter ++;
+	pfenceCounter7 ++;
 	PFENCE();  // pmem_drain(); // SFENCE
 	rfc->announce_arr[pid]->valid = true;
 
@@ -539,6 +540,7 @@ uint64_t pushPopTest(pmem::obj::pool<root> pop, pmem::obj::persistent_ptr<root> 
 	};
 
 	for (int irun = 0; irun < numRuns; irun++) {
+		NN = numThreads;
 		// currently, for each run there is one poolfile. therefore, only one run is supported
 
 		// Fill the queue with an initial amount of nodes
@@ -595,10 +597,29 @@ int runSeveralTests(pmem::obj::pool<root> pop, pmem::obj::persistent_ptr<root> p
         int nThreads = threadList[it];
         std::cout << "\n----- pstack-ll (push-pop)   threads=" << nThreads << "   pairs=" << numPairs/MILLION << "M   runs=" << numRuns << " -----\n";
 		results[it] = pushPopTest(pop, proot, nThreads, numPairs, numRuns);
+		pwbCounter = pwbCounter1 + pwbCounter2 + pwbCounter3 + pwbCounter4 + pwbCounter5+ pwbCounter6 + pwbCounter7 + pwbCounter8+ pwbCounter9 + pwbCounter10;
 		std::cout << "#pwb/#op: " << pwbCounter / results[it] << std::endl;
+		std::cout << "#pwb1/#op: " << pwbCounter1 / results[it] << std::endl;
+		std::cout << "#pwb2/#op: " << pwbCounter2 / results[it] << std::endl;
+		std::cout << "#pwb3/#op: " << pwbCounter3 / results[it] << std::endl;
+		std::cout << "#pwb4/#op: " << pwbCounter4 / results[it] << std::endl;
+		std::cout << "#pwb5/#op: " << pwbCounter5 / results[it] << std::endl;
+		std::cout << "#pwb6/#op: " << pwbCounter6 / results[it] << std::endl;
+		std::cout << "#pwb7/#op: " << pwbCounter7 / results[it] << std::endl;
+		std::cout << "#pwb8/#op: " << pwbCounter8 / results[it] << std::endl;
+		std::cout << "#pwb9/#op: " << pwbCounter9 / results[it] << std::endl;
+		std::cout << "#pwb10/#op: " << pwbCounter10 / results[it] << std::endl;
+		pfenceCounter = pfenceCounter1 + pfenceCounter2 + pfenceCounter3 + pfenceCounter4 + pfenceCounter5+ pfenceCounter6 + pfenceCounter7;
 		std::cout << "#pfence/#op: " << pfenceCounter / results[it] << std::endl;
-		pwbCounter = 0;
-		pfenceCounter = 0;
+		std::cout << "#pfence1/#op: " << pfenceCounter1 / results[it] << std::endl;
+		std::cout << "#pfence2/#op: " << pfenceCounter2 / results[it] << std::endl;
+		std::cout << "#pfence3/#op: " << pfenceCounter3 / results[it] << std::endl;
+		std::cout << "#pfence4/#op: " << pfenceCounter4 / results[it] << std::endl;
+		std::cout << "#pfence5/#op: " << pfenceCounter5 / results[it] << std::endl;
+		std::cout << "#pfence6/#op: " << pfenceCounter6 / results[it] << std::endl;
+		std::cout << "#pfence7/#op: " << pfenceCounter7 / results[it] << std::endl;
+		pwbCounter = 0; pwbCounter1=0; pwbCounter2=0; pwbCounter3=0; pwbCounter4=0; pwbCounter5=0; pwbCounter6=0; pwbCounter7=0; pwbCounter8=0; pwbCounter9=0; pwbCounter10=0;
+		pfenceCounter = 0; pfenceCounter1=0; pfenceCounter2=0; pfenceCounter3=0; pfenceCounter4=0; pfenceCounter5=0; pfenceCounter6=0; pfenceCounter7=0;
     }
 
     // Export tab-separated values to a file to be imported in gnuplot or excel
