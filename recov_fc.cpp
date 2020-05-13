@@ -471,17 +471,17 @@ size_t op(persistent_ptr<recoverable_fc> rfc, pmem::obj::pool<root> pop, size_t 
 	// announce
 	rfc->announce_arr[pid]->valid = false;
 	// asm volatile("mfence" ::: "memory");
-	pwbCounter9 ++;
+	// pwbCounter9 ++;
 	PWB(&rfc->announce_arr[pid]->valid);
-	pfenceCounter6 ++;
+	// pfenceCounter6 ++;
 	PFENCE(); 
     rfc->announce_arr[pid]->val = NONE;
 	rfc->announce_arr[pid]->epoch = opEpoch;
 	rfc->announce_arr[pid]->param = param;
     rfc->announce_arr[pid]->name = opName;
-	pwbCounter10 ++;
+	// pwbCounter10 ++;
 	PWB(&rfc->announce_arr[pid]);
-	pfenceCounter7 ++;
+	// pfenceCounter7 ++;
 	PFENCE();
 	rfc->announce_arr[pid]->valid = true;
 	// asm volatile("mfence" ::: "memory");
