@@ -1,0 +1,3 @@
+/home/matanr/recov_flat_combining/scalable_recoverable_flat_combining/CMakeFiles/rebuild_cache.dir
+/home/matanr/recov_flat_combining/scalable_recoverable_flat_combining/CMakeFiles/edit_cache.dir
+/home/matanr/recov_flat_combining/scalable_recoverable_flat_combining/CMakeFiles/srfc.dir

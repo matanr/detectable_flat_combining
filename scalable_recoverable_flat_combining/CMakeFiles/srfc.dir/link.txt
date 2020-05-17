@@ -1,0 +1,1 @@
+/opt/sw/gcc/9.1.0/bin/c++  -g -O2 -DPWB_IS_CLFLUSH -fsanitize=address  -rdynamic CMakeFiles/srfc.dir/srfc.cpp.o  -o srfc  -L/opt/sw/pmdk/pmdk-1.8_install/lib -Wl,-rpath,/opt/sw/pmdk/pmdk-1.8_install/lib -lpmemobj -lpmem 
