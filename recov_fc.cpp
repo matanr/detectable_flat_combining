@@ -430,7 +430,7 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 	PWB(&rfc->top[(opEpoch/2 + 1) % 2]);
 	// pfenceCounter3 ++;
 	// // maybe this is not necessary
-	// PFENCE();
+	PFENCE();
 	rfc->cEpoch = rfc->cEpoch + 1;
 	pwbCounter7 ++;
 	PWB(&rfc->cEpoch);
