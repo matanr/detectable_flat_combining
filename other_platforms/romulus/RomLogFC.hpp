@@ -639,19 +639,19 @@ public:
         }
         // Try one time to mmap() with DAX. If it fails due to MAP_FAILED, then retry without DAX.
         // We may fail because the address is not available. Retry at most 4 times, then give up.
-        uint64_t dax_flag = MAP_SYNC;
+        // uint64_t dax_flag = MAP_SYNC;
         void* got_addr = NULL;
         for (int i = 0; i < 4; i++) {
             // got_addr = mmap(regionAddr, regionSize, (PROT_READ | PROT_WRITE), MAP_SHARED_VALIDATE | dax_flag, pfd, 0);
             got_addr = mmap(regionAddr, regionSize, (PROT_READ | PROT_WRITE), MAP_SHARED, pfd, 0);
             if (got_addr == regionAddr) {
             // if (got_addr == NULL) {
-                if (dax_flag == 0) printf("WARNING: running without DAX enabled\n");
+                // if (dax_flag == 0) printf("WARNING: running without DAX enabled\n");
                 break;
             }
             if (got_addr == MAP_FAILED) {
                 // Failed to mmap(). Let's try without DAX.
-                dax_flag = 0;
+                // dax_flag = 0;
             } else {
                 // mmap() worked but in wrong address. Let's unmap() and try again.
                 munmap(got_addr, regionSize);

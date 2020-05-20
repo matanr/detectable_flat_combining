@@ -42,7 +42,7 @@ int NN = 40;  // number of processes running now
 #define ACK -4
 #define PUSH_OP true
 #define POP_OP false
-#define MAX_OPS 20
+#define MAX_OPS 16
 
 
 // Macros needed for persistence
@@ -93,13 +93,17 @@ struct reduction {
 	std::atomic<bool> ready;
 	std::list<size_t>* reducedList;
 	std::list<size_t>* announcedOps;
+	std::atomic<bool> shouldHelp;
 };
 
 std::atomic<bool> cLock {false};    // holds true when locked, holds false when unlocked
 bool garbage_collected = false;
-std::atomic<int> nCombiners;  // number of remaining helping combiners to get in
+std::atomic<int> nPossibleCombiners;  // number of remaining helping combiners to get in
+std::atomic<int> nActualCombiners;  // number of remaining helping combiners to get in
 reduction* reductions [N];
-std::atomic<bool> helpCombining {false};
+std::atomic<bool> helpCombining;
+std::atomic<bool> helpLock;
+
 
 struct alignas(64) announce {
     p<uint64_t> val;
@@ -166,6 +170,8 @@ void transaction_allocations(persistent_ptr<root> proot, pmem::obj::pool<root> p
 			reductions[pid]->reducedList = new std::list<size_t>();
 			reductions[pid]->announcedOps = new std::list<size_t>();
 			reductions[pid]->ready.store(false);
+			reductions[pid]->shouldHelp.store(false);
+			helpCombining.store(false);
 		}
 		for (int i=0; i < MAX_POOL_SIZE; i++) {
 			proot->rfc->nodes_pool[i] = make_persistent<node>();
@@ -174,7 +180,9 @@ void transaction_allocations(persistent_ptr<root> proot, pmem::obj::pool<root> p
 			proot->rfc->nodes_pool[i]->is_free = true;
 		} 
 	});
-	helpCombining.store(false, std::memory_order_release);
+	nPossibleCombiners.store(0, std::memory_order_release);
+	nActualCombiners.store(0, std::memory_order_release);
+	helpLock.store(false, std::memory_order_release);
 }
 
 
@@ -223,15 +231,32 @@ void help_reducing(persistent_ptr<recoverable_fc> rfc, int combinerNum) {
 		reductions[combinerNum]->announcedOps->pop_front();
 	}
 	reductions[combinerNum]->ready.store(true, std::memory_order_release);
+	// reductions[combinerNum]->shouldHelp.store(true, std::memory_order_release);
 }
 
 void try_to_help_combining(persistent_ptr<recoverable_fc> rfc, size_t & opEpoch, size_t pid) {
 	if (helpCombining.load(std::memory_order_acquire)) {
-		int combinerNum = nCombiners.fetch_sub(1);
-		if (combinerNum > 0){
-			help_reducing(rfc, combinerNum);
+		bool expected = false;
+		bool shouldHelp = helpLock.compare_exchange_strong(expected, true);
+		if (shouldHelp) {
+			int combinerNum = nPossibleCombiners.load(std::memory_order_acquire);
+			if (combinerNum > 0) {
+				nPossibleCombiners.fetch_sub(1);
+				combinerNum = nActualCombiners.fetch_add(1) + 1;
+				helpLock.store(false, std::memory_order_release);
+				help_reducing(rfc, combinerNum);	
+			}
+			else {
+				helpLock.store(false, std::memory_order_release);
+			}
 		}
 	}
+		
+		// int combinerNum = nCombiners.fetch_add(1);
+		// while (! reductions[combinerNum + 1]->shouldHelp.load(std::memory_order_acquire)){
+		// 	help_reducing(rfc, combinerNum);
+		// }
+	// }
 }
 
 
@@ -350,19 +375,30 @@ std::list<size_t> reduce(persistent_ptr<recoverable_fc> rfc) {
 
 			opsNum ++;
 			if (opsNum > MAX_OPS) {
-				opsNum = 0;
+				opsNum = 1;
+				if (combinerNum == 0) {
+					helpCombining.store(true, std::memory_order_release);
+					// helpLock.store(false, std::memory_order_release);
+				}
+				// reductions[combinerNum]->shouldHelp.store(true, std::memory_order_release);
+				else {
+					nPossibleCombiners.fetch_add(1);
+				}
 				combinerNum ++;
 			}
 			reductions[combinerNum]->announcedOps->push_front(i);
 		}
 	}
-	nCombiners.store(combinerNum);
-	if (combinerNum > 0){
-		helpCombining.store(true, std::memory_order_release);
+	// reductions[combinerNum]->shouldHelp.store(true, std::memory_order_release);
+	if (combinerNum > 0) {
+		nPossibleCombiners.fetch_add(1);
 	}
 	help_reducing(rfc, 0);
 	std::list<size_t> opsList = reduce_the_reduced(rfc, combinerNum);
 	helpCombining.store(false, std::memory_order_release);
+	// helpLock.store(true, std::memory_order_release);
+	nPossibleCombiners.store(0, std::memory_order_release);
+	nActualCombiners.store(0, std::memory_order_release);
 
 	auto stopBeats = steady_clock::now();
 	reduceCounter += stopBeats - startBeats;

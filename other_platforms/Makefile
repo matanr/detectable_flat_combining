@@ -26,7 +26,7 @@ PMDKLIBS=`pkg-config --libs libpmemobj++`
 CONC_PTM_NAMES := \
 	bin-romlogfc \
 	bin-oflf \
-	bin-pmdk \
+	# bin-pmdk \
 	
 	
 BINARIES_SEQ = \
