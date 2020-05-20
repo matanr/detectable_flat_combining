@@ -372,20 +372,8 @@ int count_free_nodes(persistent_ptr<recoverable_fc> rfc) {
 size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::pool<root> pop, size_t pid) {
 	auto startBeats = steady_clock::now();
 	std::list<size_t> l = reduce(rfc);
-	// std::cout << "Combiner reduced:";
-	// for (auto v : l) {
-	// 	size_t cOp = rfc->announce_arr[v]->name;
-	// 	if (cOp == PUSH_OP) {
-	// 		std::cout << " " << v << "(push)";
-	// 	} else{
-	// 		std::cout << " " << v << "(pop)";
-	// 	}
-	// }
-	// std::cout << std::endl;
-	// std::cout << ", opEpoch is: " << opEpoch << std::endl;
 	persistent_ptr<node> head = rfc->top[(opEpoch/2)%2];
 	if (!l.empty()) {
-		// std::cout << "l not empty" << std::endl;
 		size_t cId = l.front();
 		bool cOp = rfc->announce_arr[cId]->name;
 		if (cOp == PUSH_OP) {
@@ -435,12 +423,8 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
     }
 	for (int i=0;i<NN;i++) {
 		size_t currentEpoch = rfc->cEpoch;
-		// if (rfc->announce_arr[i]->val != NONE && rfc->announce_arr[i]->epoch == currentEpoch) {
-		// 	pwbCounter5 ++;
-		// 	PWB(&rfc->announce_arr[pid]);
-		// }
 		pwbCounter5 ++;
-		PWB(&rfc->announce_arr[pid]);
+		PWB(&rfc->announce_arr[i]);
 	}
 	pwbCounter6 ++;
 	PWB(&rfc->top[(opEpoch/2 + 1) % 2]);
@@ -464,7 +448,6 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 	combineCounter += stopBeats - startBeats;
 	cLock.store(false, std::memory_order_release);
 	size_t value =  try_to_return(rfc, opEpoch, pid);
-	// std::cout << "after try_to_return" << std::endl;
 	return value;
 }
 
@@ -498,7 +481,6 @@ size_t op(persistent_ptr<recoverable_fc> rfc, pmem::obj::pool<root> pop, size_t 
 		return value;
 	}
 	opEpoch = rfc->cEpoch;
-	// std::cout << "~~~ Combiner is: " << pid << " ~~~" << std::endl;
 	return combine(rfc, opEpoch, pop, pid);
 }
 
