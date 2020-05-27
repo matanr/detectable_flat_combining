@@ -5,6 +5,7 @@
 #include <bits/stdc++.h>
 #include <atomic>
 #include <cstring>
+#include <cstdint>
 #include <iostream>
 #include <unistd.h>
 #include <thread>
@@ -15,6 +16,7 @@
 #include <libpmemobj++/pool.hpp>
 #include <libpmemobj++/transaction.hpp>
 #include <libpmem.h>
+#include <cmath> 
 
 using namespace pmem;
 using namespace pmem::obj;
@@ -22,7 +24,7 @@ using namespace std::chrono;
 using namespace std::literals::chrono_literals;
 
 #ifndef DATA_FILE
-#define DATA_FILE "other_platforms/data/pstack-ll-rfc.txt"
+#define DATA_FILE "data/green-pstack-ll-rfc.txt"
 #endif
 #ifndef PM_REGION_SIZE
 #define PM_REGION_SIZE 1024*1024*1024ULL // 1GB for now
@@ -35,13 +37,16 @@ using namespace std::literals::chrono_literals;
 #endif
 
 #define N 40  // number of processes
-int NN = 40;  // number of processes running now
-#define MAX_POOL_SIZE 40  // number of nodes in the pool
+#define MAX_POOL_SIZE 1000000  // number of nodes in the pool
 #define ACK -1
 #define EMPTY -2
 #define NONE -3
 #define PUSH_OP true
 #define POP_OP false
+
+int NN = N;  // number of processes running now
+const int num_words = MAX_POOL_SIZE / 64 + 1;
+uint64_t free_nodes_log [num_words];
 
 
 // Macros needed for persistence
@@ -91,8 +96,11 @@ int pfenceCounter = 0; int pfenceCounter1=0; int pfenceCounter2=0; int pfenceCou
 std::atomic<int> pwbCounter9(0);
 std::atomic<int> pfenceCounter6(0);
 nanoseconds combineCounter = 0ns; nanoseconds reduceCounter = 0ns; nanoseconds findFreeCounter = 0ns; 
+int pushList[N];
+int popList[N];
+int opsList[N];
 
-struct alignas(64) announce {
+struct alignas(64) announce { // maybe less than 64. 25? probably 32
     p<size_t> val;
     p<size_t> epoch;
 	p<bool> name;
@@ -103,7 +111,7 @@ struct alignas(64) announce {
 struct node {
     p<size_t> param;
     persistent_ptr<node> next;
-    p<bool> is_free;
+    p<uint64_t> index;
 } ;
 
 struct recoverable_fc {
@@ -153,12 +161,16 @@ void transaction_allocations(persistent_ptr<root> proot, pmem::obj::pool<root> p
 			proot->rfc->announce_arr[pid]->param = NONE;
 			proot->rfc->announce_arr[pid]->valid = false;
 		}
-		for (int i=0; i < MAX_POOL_SIZE; i++) {
+		for (uint64_t i=0; i < MAX_POOL_SIZE; i++) {
 			proot->rfc->nodes_pool[i] = make_persistent<node>();
 			proot->rfc->nodes_pool[i]->param = NONE;
 			proot->rfc->nodes_pool[i]->next = NULL;
-			proot->rfc->nodes_pool[i]->is_free = true;
+			proot->rfc->nodes_pool[i]->index = i;
 		} 
+
+		for (uint64_t i=0; i < num_words; i++) {
+			free_nodes_log[i] = ~0;
+		}
 	});
 }
 
@@ -197,24 +209,27 @@ size_t try_to_return(persistent_ptr<recoverable_fc> rfc, size_t & opEpoch, size_
 }
 
 
-std::list<size_t> reduce(persistent_ptr<recoverable_fc> rfc) {
+int reduce(persistent_ptr<recoverable_fc> rfc) {
 	auto startBeats = steady_clock::now();
-	std::list<size_t> opsList;
+	// std::list<size_t> opsList;
+	int top_index = -1;
 	if (rfc->cEpoch%2 == 1) {
 		rfc->cEpoch = rfc->cEpoch + 1;
+		pwbCounter1 ++;
+		PWB(&rfc->cEpoch);
+		pfenceCounter1 ++;
+		PFENCE(); 
 	}
-	pwbCounter1 ++;
-	PWB(&rfc->cEpoch);
-	pfenceCounter1 ++;
-	PFENCE(); 
+	
 	for (size_t i = 0; i < NN; i++) {
 		if (rfc->announce_arr[i] == NULL) {
 			continue;
 		}
+		bool isOpValid = rfc->announce_arr[i]->valid; // next two lines 
 		size_t opEpoch = rfc->announce_arr[i]->epoch;
 		size_t opVal = rfc->announce_arr[i]->val;
-		bool isOpValid = rfc->announce_arr[i]->valid;
 		if (isOpValid && (opEpoch == rfc->cEpoch || opVal == NONE)) {
+		// if (opEpoch == rfc->cEpoch || opVal == NONE) {
 			rfc->announce_arr[i]->epoch = rfc->cEpoch;
 			// pwbCounter2 ++;
 			// PWB(&rfc->announce_arr[i]);
@@ -223,39 +238,41 @@ std::list<size_t> reduce(persistent_ptr<recoverable_fc> rfc) {
             bool opName = rfc->announce_arr[i]->name;
             size_t opParam = rfc->announce_arr[i]->param;
 			if (opName == PUSH_OP) {
-				if (opsList.empty()) {
-					opsList.push_front(i);
+				if (top_index == -1) {
+					top_index ++;
+					opsList[top_index] = i;
 				}
 				else {
-					size_t cId = opsList.front();
+					size_t cId = opsList[top_index];
 					bool cOp = rfc->announce_arr[cId]->name;
 					if (cOp == PUSH_OP) {
-						opsList.push_front(i);
+						top_index ++;
+						opsList[top_index] = i;
 					}
 					else {
-						// std::cout << "merging push with prev pop. opsList size: " << opsList.size() << std::endl;
 						rfc->announce_arr[i]->val = ACK;
 						rfc->announce_arr[cId]->val = opParam;
-						opsList.pop_front();
-						// std::cout << "opsList size: " << opsList.size() << std::endl;
+						top_index --;
 					}
 				}
 			}
 			else if (opName == POP_OP) {
-				if (opsList.empty()) {
-					opsList.push_front(i);
+				if (top_index == -1) {
+					top_index ++;
+					opsList[top_index] = i;
 				}
 				else {
-					size_t cId = opsList.front();
+					size_t cId = opsList[top_index];
 					bool cOp = rfc->announce_arr[cId]->name;
 					if (cOp == POP_OP) {
-						opsList.push_front(i);
+						top_index ++;
+						opsList[top_index] = i;
 					}
 					else {
 						rfc->announce_arr[cId]->val = ACK;
 						size_t pushParam = rfc->announce_arr[cId]->param;
 						rfc->announce_arr[i]->val = pushParam;
-						opsList.pop_front();
+						top_index --;
 					}
 				}
 			}
@@ -263,19 +280,20 @@ std::list<size_t> reduce(persistent_ptr<recoverable_fc> rfc) {
 	}
 	auto stopBeats = steady_clock::now();
 	reduceCounter += stopBeats - startBeats;
-	return opsList; // empty list
+	return top_index; // empty list
 }
 
-std::list<size_t> reduce2lists(persistent_ptr<recoverable_fc> rfc) {
-	auto startBeats = steady_clock::now();
-	std::list<size_t> pushList, popList;
+int reduce2lists(persistent_ptr<recoverable_fc> rfc) {
+	// auto startBeats = steady_clock::now();
+	int top_push = -1;
+	int top_pop = -1;
 	if (rfc->cEpoch%2 == 1) {
 		rfc->cEpoch = rfc->cEpoch + 1;
+		pwbCounter1 ++;
+		PWB(&rfc->cEpoch);
+		pfenceCounter1 ++;
+		PFENCE(); 
 	}
-	pwbCounter1 ++;
-	PWB(&rfc->cEpoch);
-	pfenceCounter1 ++;
-	PFENCE(); 
 	for (size_t i = 0; i < NN; i++) {
 		if (rfc->announce_arr[i] == NULL) {
 			continue;
@@ -288,69 +306,112 @@ std::list<size_t> reduce2lists(persistent_ptr<recoverable_fc> rfc) {
             bool opName = rfc->announce_arr[i]->name;
             size_t opParam = rfc->announce_arr[i]->param;
 			if (opName == PUSH_OP) {
-				pushList.push_back(i);
+				top_push ++;
+				pushList[top_push] = i;
 			}
 			else if (opName == POP_OP) {
-				popList.push_back(i);
+				top_pop ++;
+				popList[top_pop] = i;
 			}
-			pwbCounter2 ++;
+			// pwbCounter2 ++;
 			// PWB(&rfc->announce_arr[i]);
-			PWB(&rfc->announce_arr[i]->epoch);
+			// PWB(&rfc->announce_arr[i]->epoch);
 		}
 	}
 	// pfenceCounter2 ++;
 	// PFENCE();
-	while((!pushList.empty()) || (!popList.empty())) {
-		auto cPush = pushList.front();
-		auto cPop = popList.front();
-		if ((!pushList.empty()) && (!popList.empty())) {
+	size_t cPush;
+	size_t cPop;
+	while((top_push != -1) || (top_pop != -1)) {
+		if ((top_push != -1) && (top_pop != -1)) {
+			cPush = pushList[top_push];
+			cPop  = popList[top_pop];
             rfc->announce_arr[cPush]->val = ACK;
 			size_t pushParam = rfc->announce_arr[cPush]->param;
             rfc->announce_arr[cPop]->val = pushParam;
 
-			pushList.pop_front();
-			popList.pop_front();
+			top_push --;
+			top_pop --;
 		}
-		else if (!pushList.empty()) {
-			auto stopBeats = steady_clock::now();
-			reduceCounter += stopBeats - startBeats;
-			return pushList;
+		else if (top_push != -1) {
+			// auto stopBeats = steady_clock::now();
+			// reduceCounter += stopBeats - startBeats;
+			return (top_push + 1);
 		}
 		else {
-			auto stopBeats = steady_clock::now();
-			reduceCounter += stopBeats - startBeats;
-			return popList;
+			// auto stopBeats = steady_clock::now();
+			// reduceCounter += stopBeats - startBeats;
+			return -1 * (top_pop + 1);
 		}
 	}
-	auto stopBeats = steady_clock::now();
-	reduceCounter += stopBeats - startBeats;
-	return pushList; // empty list
+	// auto stopBeats = steady_clock::now();
+	// reduceCounter += stopBeats - startBeats;
+	return 0; // empty list
 }
+
+void bin(uint64_t n) 
+{ 
+    if (n > 1) 
+    bin(n>>1); 
+      
+    printf("%d", n & 1); 
+} 
+
 
 // garbage collection, updates is_free for all nodes in the pool
 void update_free_nodes(persistent_ptr<recoverable_fc> rfc, size_t opEpoch) {
 	// each node is free, unless current top is somehow points to it
-	for (int i=0; i<MAX_POOL_SIZE; i++) {
-		rfc->nodes_pool[i]->is_free = true;
+	// for (int i=0; i<MAX_POOL_SIZE; i++) {
+	// 	rfc->nodes_pool[i]->is_free = true;
+	// }
+	// int notfree_count = 0;
+	// auto current = rfc->top[(opEpoch/2)%2];
+	// while (current != NULL) {
+	// 	current->is_free = false;
+	// 	current = current->next;
+	// 	notfree_count ++;
+	// }
+
+	for (int i=0; i<num_words; i++) {
+		free_nodes_log[i] = ~0;
 	}
-	int notfree_count = 0;
+	// int notfree_count = 0;
 	auto current = rfc->top[(opEpoch/2)%2];
 	while (current != NULL) {
-		current->is_free = false;
+		int i = current->index;
+		uint64_t n = free_nodes_log[i/64];
+		uint64_t p = i % 64;
+		uint64_t b = 0;
+		uint64_t mask = 1UL << p; 
+		free_nodes_log[i/64] = (n & ~mask) | ((b << p) & mask);
 		current = current->next;
-		notfree_count ++;
+		// notfree_count ++;
 	}
 }
 
 
 // after crash, combiner must run garbage collection, and update the is_free field of each node in the pool
-int find_free_node(persistent_ptr<recoverable_fc> rfc, int current_index=0) {
+int find_free_node(persistent_ptr<recoverable_fc> rfc) {
+	// auto startBeats = steady_clock::now();
+	// for (int i=current_index; i<MAX_POOL_SIZE; i++) {
+	// 	if (rfc->nodes_pool[i]->is_free)  {
+	// 		auto stopBeats = steady_clock::now();
+	// 		findFreeCounter += stopBeats - startBeats;
+	// 		return i;
+	// 	}
+	// }
+	// auto stopBeats = steady_clock::now();
+	// findFreeCounter += stopBeats - startBeats;
+	// return -1;
+
 	auto startBeats = steady_clock::now();
-	for (int i=current_index; i<MAX_POOL_SIZE; i++) {
-		if (rfc->nodes_pool[i]->is_free)  {
+	for (int i=0; i<num_words; i++) {
+		uint64_t n = free_nodes_log[i/64];
+		uint64_t pos = log2(n & -n); 
+		if (pos < 64) {
 			auto stopBeats = steady_clock::now();
 			findFreeCounter += stopBeats - startBeats;
-			return i;
+			return pos;
 		}
 	}
 	auto stopBeats = steady_clock::now();
@@ -358,71 +419,125 @@ int find_free_node(persistent_ptr<recoverable_fc> rfc, int current_index=0) {
 	return -1;
 }
 
-int count_free_nodes(persistent_ptr<recoverable_fc> rfc) {
-	int counter = 0;
-	for (int i=0; i<MAX_POOL_SIZE; i++) {
-		if (rfc->nodes_pool[i]->is_free)  {
-			counter ++;
-		}
-	}
-	return counter;
-}
+// int count_free_nodes(persistent_ptr<recoverable_fc> rfc) {
+// 	int counter = 0;
+// 	for (int i=0; i<MAX_POOL_SIZE; i++) {
+// 		if (rfc->nodes_pool[i]->is_free)  {
+// 			counter ++;
+// 		}
+// 	}
+// 	return counter;
+// }
 
 
 size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::pool<root> pop, size_t pid) {
-	auto startBeats = steady_clock::now();
-	std::list<size_t> l = reduce(rfc);
+	// auto startBeats = steady_clock::now();
+	// int top_index = reduce(rfc);
+	int top_index = reduce2lists(rfc);
 	persistent_ptr<node> head = rfc->top[(opEpoch/2)%2];
-	if (!l.empty()) {
-		size_t cId = l.front();
-		bool cOp = rfc->announce_arr[cId]->name;
-		if (cOp == PUSH_OP) {
-			int freeIndexLowerLim = 0;
+	// if (top_index != -1) {
+	if (top_index != 0) {
+		// size_t cId = opsList[top_index];
+		// bool cOp = rfc->announce_arr[cId]->name;
+		// if (cOp == PUSH_OP) {
+		size_t cId;
+		bool cOp;
+		if (top_index > 0) { // push
+			top_index --;
+
+			// int freeIndexLowerLim = 0;
 			do {
-				int freeIndex = find_free_node(rfc, freeIndexLowerLim);
-				if (freeIndex == -1) {
+				cId = pushList[top_index];
+				cOp = rfc->announce_arr[cId]->name;
+				// int freeIndex = find_free_node(rfc);
+				// if (freeIndex == -1) {
+				// 	std::cerr << "Nodes pool is too small" << std::endl;
+				// 	exit(-1);
+				// }
+				// freeIndexLowerLim ++;
+
+
+				// the problem is that we don't check if pos is bigger than the entire pool.
+				uint64_t pos = -1;
+				for (int i=0; i<num_words; i++) {
+					uint64_t n = free_nodes_log[i/64];
+					uint64_t temp_pos = log2(n & -n); 
+					if (temp_pos >= 64) continue;
+					temp_pos += i * 64;
+					if (temp_pos < MAX_POOL_SIZE) {
+						pos = temp_pos;
+						break;
+					}
+				}
+				if (pos == -1) {
 					std::cerr << "Nodes pool is too small" << std::endl;
 					exit(-1);
 				}
-				freeIndexLowerLim ++;
-				auto newNode = rfc->nodes_pool[freeIndex];
+				auto newNode = rfc->nodes_pool[pos];
 				size_t newParam = rfc->announce_arr[cId]->param;
 				newNode->param = newParam;
 				newNode->next = head;
-				newNode->is_free = false;
+				// std::cout << "pos: " << pos << std::endl;
+				// newNode->is_free = false; //change
+				uint64_t n = free_nodes_log[pos/64];
+				uint64_t p = pos % 64;
+				uint64_t b = 0;  // set 0 (not free)
+				uint64_t mask = 1UL << p; 
+				// std::cout << "top_index: " << top_index << ", PUSH, pos: " << p << std::endl;
+				// bin(free_nodes_log[pos/64]);
+				// std::cout << std::endl;
+				free_nodes_log[pos/64] = (n & ~mask) | ((b << p) & mask);
+				// bin(free_nodes_log[pos/64]);
+				// std::cout << std::endl;
+
                 rfc->announce_arr[cId]->val = ACK;
 				pwbCounter3 ++;
 				PWB(&newNode);
 				head = newNode;
-				l.pop_front();
-				cId = l.front();
-			} while (!l.empty());
-			rfc->top[(opEpoch/2 + 1)%2] = head;
+				top_index -- ;
+				// cId = pushList[top_index];
+			} while (top_index != -1);
+			// rfc->top[(opEpoch/2 + 1)%2] = head;
 		}
-		else {
+		else { // pop. should convert to positive index, and then 
+			top_index = -1 * top_index - 1;
+			size_t cId;
 			do {
+				cId = popList[top_index];
 				if (head == NULL) {
                     rfc->announce_arr[cId]->val = EMPTY;
 				}
 				else {
                     size_t headParam = head->param;
 					rfc->announce_arr[cId]->val = headParam;
-					head->is_free = true;
-					pwbCounter4 ++;
-					PWB(&head);
+					// head->is_free = true; //
+					uint64_t i = head->index;
+					uint64_t n = free_nodes_log[i/64];
+					uint64_t p = i % 64;
+					uint64_t b = 1;  // set 1 (free)
+					uint64_t mask = 1UL << p; 
+					// std::cout << "top_index: " << top_index << ", POP, pos: " << p << std::endl;
+					// bin(free_nodes_log[i/64]);
+					// std::cout << std::endl;
+					free_nodes_log[i/64] = (n & ~mask) | ((b << p) & mask);
+					// bin(free_nodes_log[i/64]);
+					// std::cout << std::endl;
+
+					// pwbCounter4 ++;
+					// PWB(&head);
 					head = head->next;
 				}
-				l.pop_front();
-				cId = l.front();
-			} while (!l.empty());
-			rfc->top[(opEpoch/2 + 1) % 2] = head;
+				top_index -- ;
+				// cId = popList[top_index];
+			} while (top_index != -1);
+			// rfc->top[(opEpoch/2 + 1) % 2] = head;
 		}		
 	}
-    else { // important !
-        rfc->top[(opEpoch/2 + 1) % 2] = rfc->top[(opEpoch/2) % 2];
-    }
-	for (int i=0;i<NN;i++) {
-		size_t currentEpoch = rfc->cEpoch;
+    // else { // important !
+    //     rfc->top[(opEpoch/2 + 1) % 2] = rfc->top[(opEpoch/2) % 2];
+    // }
+	rfc->top[(opEpoch/2 + 1) % 2] = head;
+	for (int i=0;i<NN;i++) { //maybe persist on line. check on optane
 		pwbCounter5 ++;
 		PWB(&rfc->announce_arr[i]);
 	}
@@ -433,19 +548,23 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 	rfc->cEpoch = rfc->cEpoch + 1;
 	// maybe this is not necessary
 	pwbCounter7 ++;
+	// this is important for the following case: the combiner updates the cEpoch, then several ops started to finish and return, 
+	// BEFORE cEpoch is persisted. then, when the system recovers we can't distinguish between the following cases: 
+	// 1. the combiner finished an operation and updated cEpoch (because it is not persisted), and several ops returned
+	// 2. the combiner was in a middle of the combining session (for example).
 	PWB(&rfc->cEpoch);
-	// pfenceCounter4 ++;
-	// // maybe this is not necessary
-	// PFENCE();
-	rfc->cEpoch = rfc->cEpoch + 1;
-	pwbCounter8 ++;
-	PWB(&rfc->cEpoch); 
-	pfenceCounter5 ++;
+	pfenceCounter4 ++;
+	// maybe this is not necessary
 	PFENCE();
+	rfc->cEpoch = rfc->cEpoch + 1;
+	// pwbCounter8 ++;
+	// PWB(&rfc->cEpoch); 
+	// pfenceCounter5 ++;
+	// PFENCE();
 	bool expected = true;
 	// bool combiner = cLock.compare_exchange_strong(expected, false, std::memory_order_release, std::memory_order_relaxed);
-	auto stopBeats = steady_clock::now();
-	combineCounter += stopBeats - startBeats;
+	// auto stopBeats = steady_clock::now();
+	// combineCounter += stopBeats - startBeats;
 	cLock.store(false, std::memory_order_release);
 	size_t value =  try_to_return(rfc, opEpoch, pid);
 	return value;
@@ -460,16 +579,19 @@ size_t op(persistent_ptr<recoverable_fc> rfc, pmem::obj::pool<root> pop, size_t 
 	} 
 	// announce
 	rfc->announce_arr[pid]->valid = false;
-	// pwbCounter9 ++;
-	std::atomic_fetch_add(&pwbCounter9, 1);
-	PWB(&rfc->announce_arr[pid]->valid);
-	// pfenceCounter6 ++;
-	std::atomic_fetch_add(&pfenceCounter6, 1);
-	PFENCE(); 
-    rfc->announce_arr[pid]->val = NONE;
-	rfc->announce_arr[pid]->epoch = opEpoch;
+	 
 	rfc->announce_arr[pid]->param = param;
     rfc->announce_arr[pid]->name = opName;
+	rfc->announce_arr[pid]->epoch = opEpoch;
+	rfc->announce_arr[pid]->val = NONE;
+	// pwbCounter9 ++;
+	// std::atomic_fetch_add(&pwbCounter9, 1);
+	PWB(&rfc->announce_arr[pid]);
+	// pfenceCounter6 ++;
+	// std::atomic_fetch_add(&pfenceCounter6, 1);
+	PFENCE();
+	// if after crash we see valid=true, we can be sure that all announcements were completed
+
 	// pwbCounter10 ++;
 	// PWB(&rfc->announce_arr[pid]);
 	// pfenceCounter7 ++;
@@ -480,7 +602,7 @@ size_t op(persistent_ptr<recoverable_fc> rfc, pmem::obj::pool<root> pop, size_t 
 	if (value != NONE){
 		return value;
 	}
-	opEpoch = rfc->cEpoch;
+	opEpoch = rfc->cEpoch; //elaborate
 	return combine(rfc, opEpoch, pop, pid);
 }
 
@@ -500,7 +622,7 @@ size_t recover(persistent_ptr<recoverable_fc> rfc, pmem::obj::pool<root> pop, si
 	if (value != NONE){
 		return value;
 	}
-	// garbage collect and update the is_free of nodes
+	// garbage collect and update what nodes are free
     if (! garbage_collected) {
 	    update_free_nodes(rfc, opEpoch);
         garbage_collected = true;
@@ -545,19 +667,25 @@ uint64_t pushPopTest(pmem::obj::pool<root> pop, pmem::obj::persistent_ptr<root> 
 		auto startBeats = steady_clock::now();
 		for (long long iter = 0; iter < numPairs/numThreads; iter++) {
 			op(proot->rfc, pop, tid, PUSH_OP, param);
-			// print_state(proot->rfc);
 			if (op(proot->rfc, pop, tid, POP_OP, NONE) == EMPTY) std::cout << "Error at measurement pop() iter=" << iter << "\n";
-			// print_state(proot->rfc);
-			// int counter = count_free_nodes(proot->rfc);
-			// if (counter < 40) {
-			// 	std::cout << "free nodes: " << counter << std::endl;
-			// 	std::cout << "# free nodes lower than 40. My tid is: " << tid << std::endl;
-			// 	if (counter < 39) exit(-1);
-				
+		}
+		auto stopBeats = steady_clock::now();
+		*delta = stopBeats - startBeats;
+	};
 
-			// }
-			
-			
+	auto randop_lambda = [&numThreads, &startFlag,&numPairs, &proot, &pop](nanoseconds *delta, const int tid) {
+		size_t param = tid;
+		while (!startFlag.load()) {} // Spin until the startFlag is set
+		// Measurement phase
+		auto startBeats = steady_clock::now();
+		for (long long iter = 0; iter < 2 * numPairs/numThreads; iter++) {
+			int randop = rand() % 2;         // randop in the range 0 to 1
+			if (randop == 0) {
+				op(proot->rfc, pop, tid, PUSH_OP, param);
+			}
+			else if (randop == 1) {
+				op(proot->rfc, pop, tid, POP_OP, NONE);
+			}
 		}
 		auto stopBeats = steady_clock::now();
 		*delta = stopBeats - startBeats;
@@ -575,7 +703,8 @@ uint64_t pushPopTest(pmem::obj::pool<root> pop, pmem::obj::persistent_ptr<root> 
 		std::thread enqdeqThreads[numThreads];
 		// threads_pool[tid] = std::thread (op, proot->rfc, pop, tid, PUSH_OP, params[tid]);
 		// threads_pool[tid] = std::thread (op, proot->rfc, pop, tid, POP_OP, params[tid]);
-		for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = std::thread(pushpop_lambda, &deltas[tid][irun], tid);
+		for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = std::thread(randop_lambda, &deltas[tid][irun], tid);
+		// for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = std::thread(pushpop_lambda, &deltas[tid][irun], tid);
 		startFlag.store(true);
 		// Sleep for 2 seconds just to let the threads see the startFlag
 		std::this_thread::sleep_for(2s);
@@ -607,7 +736,7 @@ uint64_t pushPopTest(pmem::obj::pool<root> pop, pmem::obj::persistent_ptr<root> 
 int runSeveralTests(pmem::obj::pool<root> pop, pmem::obj::persistent_ptr<root> proot) {
     const std::string dataFilename { DATA_FILE };
     std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 24, 32, 40 };     // For Castor
-	// std::vector<int> threadList = {2, 4, 8, 10, 16, 24, 32, 40 };     // For Castor
+	// std::vector<int> threadList = {40};     // For Castor
     const int numRuns = 1;                                           // Number of runs
     const long numPairs = 1*MILLION;                                 // 1M is fast enough on the laptop
 
@@ -691,6 +820,7 @@ int main(int argc, char *argv[]) {
 			std::cout << "Finished allocating!" << std::endl;
 		}
 	runSeveralTests(pop, proot);
+
 	// pmem::obj::pool<root> pop;
 	// pmem::obj::persistent_ptr<root> proot;
 
