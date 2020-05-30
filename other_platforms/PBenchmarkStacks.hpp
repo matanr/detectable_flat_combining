@@ -120,6 +120,28 @@ public:
             *delta = stopBeats - startBeats;
         };
 
+        auto randop_lambda = [this,&startFlag,&numPairs,&stack](nanoseconds *delta, const int tid) {
+		uint64_t* ud = new uint64_t(42);
+		while (!startFlag.load()) {} // Spin until the startFlag is set
+		// Measurement phase
+		auto startBeats = steady_clock::now();
+		for (long long iter = 0; iter < 2 * numPairs/numThreads; iter++) {
+			int randop = rand() % 2;         // randop in the range 0 to 1
+			if (randop == 0) {
+				PTM::updateTx([&] () {
+                    stack->push(ud);
+                });
+			}
+			else if (randop == 1) {
+				PTM::updateTx([&] () {
+                    stack->pop();
+                });
+			}
+		}
+		auto stopBeats = steady_clock::now();
+		*delta = stopBeats - startBeats;
+	};
+
         for (int irun = 0; irun < numRuns; irun++) {
             PTM::updateTx([&] () { // It's ok to capture by reference, only the main thread is active (but it is not ok for CX-PTM)
                 stack = PTM::template tmNew<STACK>();
@@ -132,6 +154,7 @@ public:
                 });
             }
             thread enqdeqThreads[numThreads];
+            // for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = thread(randop_lambda, &deltas[tid][irun], tid);
             for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = thread(pushpop_lambda, &deltas[tid][irun], tid);
             startFlag.store(true);
             // Sleep for 2 seconds just to let the threads see the startFlag

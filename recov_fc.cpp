@@ -48,6 +48,9 @@ int NN = N;  // number of processes running now
 const int num_words = MAX_POOL_SIZE / 64 + 1;
 uint64_t free_nodes_log [num_words];
 
+//
+uint64_t free_nodes_log_h1;
+
 
 // Macros needed for persistence
 #ifdef PWB_IS_CLFLUSH_PFENCE_NOP
@@ -141,7 +144,6 @@ void print_state(persistent_ptr<recoverable_fc> rfc) {
         std::cout << "Param: " << current->param << std::endl;
         current = current->next;
 		counter ++;
-		
     }
 }
 
@@ -167,7 +169,6 @@ void transaction_allocations(persistent_ptr<root> proot, pmem::obj::pool<root> p
 			proot->rfc->nodes_pool[i]->next = NULL;
 			proot->rfc->nodes_pool[i]->index = i;
 		} 
-
 		for (uint64_t i=0; i < num_words; i++) {
 			free_nodes_log[i] = ~0;
 		}
@@ -211,7 +212,6 @@ size_t try_to_return(persistent_ptr<recoverable_fc> rfc, size_t & opEpoch, size_
 
 int reduce(persistent_ptr<recoverable_fc> rfc) {
 	auto startBeats = steady_clock::now();
-	// std::list<size_t> opsList;
 	int top_index = -1;
 	if (rfc->cEpoch%2 == 1) {
 		rfc->cEpoch = rfc->cEpoch + 1;
@@ -229,11 +229,7 @@ int reduce(persistent_ptr<recoverable_fc> rfc) {
 		size_t opEpoch = rfc->announce_arr[i]->epoch;
 		size_t opVal = rfc->announce_arr[i]->val;
 		if (isOpValid && (opEpoch == rfc->cEpoch || opVal == NONE)) {
-		// if (opEpoch == rfc->cEpoch || opVal == NONE) {
 			rfc->announce_arr[i]->epoch = rfc->cEpoch;
-			// pwbCounter2 ++;
-			// PWB(&rfc->announce_arr[i]);
-			// PWB(&rfc->announce_arr[i]->epoch);
 
             bool opName = rfc->announce_arr[i]->name;
             size_t opParam = rfc->announce_arr[i]->param;
@@ -280,11 +276,10 @@ int reduce(persistent_ptr<recoverable_fc> rfc) {
 	}
 	auto stopBeats = steady_clock::now();
 	reduceCounter += stopBeats - startBeats;
-	return top_index; // empty list
+	return top_index;
 }
 
 int reduce2lists(persistent_ptr<recoverable_fc> rfc) {
-	// auto startBeats = steady_clock::now();
 	int top_push = -1;
 	int top_pop = -1;
 	if (rfc->cEpoch%2 == 1) {
@@ -313,13 +308,8 @@ int reduce2lists(persistent_ptr<recoverable_fc> rfc) {
 				top_pop ++;
 				popList[top_pop] = i;
 			}
-			// pwbCounter2 ++;
-			// PWB(&rfc->announce_arr[i]);
-			// PWB(&rfc->announce_arr[i]->epoch);
 		}
 	}
-	// pfenceCounter2 ++;
-	// PFENCE();
 	size_t cPush;
 	size_t cPop;
 	while((top_push != -1) || (top_pop != -1)) {
@@ -334,26 +324,19 @@ int reduce2lists(persistent_ptr<recoverable_fc> rfc) {
 			top_pop --;
 		}
 		else if (top_push != -1) {
-			// auto stopBeats = steady_clock::now();
-			// reduceCounter += stopBeats - startBeats;
 			return (top_push + 1);
 		}
 		else {
-			// auto stopBeats = steady_clock::now();
-			// reduceCounter += stopBeats - startBeats;
 			return -1 * (top_pop + 1);
 		}
 	}
-	// auto stopBeats = steady_clock::now();
-	// reduceCounter += stopBeats - startBeats;
 	return 0; // empty list
 }
 
 void bin(uint64_t n) 
 { 
     if (n > 1) 
-    bin(n>>1); 
-      
+    bin(n>>1);  
     printf("%d", n & 1); 
 } 
 
@@ -375,7 +358,6 @@ void update_free_nodes(persistent_ptr<recoverable_fc> rfc, size_t opEpoch) {
 	for (int i=0; i<num_words; i++) {
 		free_nodes_log[i] = ~0;
 	}
-	// int notfree_count = 0;
 	auto current = rfc->top[(opEpoch/2)%2];
 	while (current != NULL) {
 		int i = current->index;
@@ -385,79 +367,22 @@ void update_free_nodes(persistent_ptr<recoverable_fc> rfc, size_t opEpoch) {
 		uint64_t mask = 1UL << p; 
 		free_nodes_log[i/64] = (n & ~mask) | ((b << p) & mask);
 		current = current->next;
-		// notfree_count ++;
 	}
 }
-
-
-// after crash, combiner must run garbage collection, and update the is_free field of each node in the pool
-int find_free_node(persistent_ptr<recoverable_fc> rfc) {
-	// auto startBeats = steady_clock::now();
-	// for (int i=current_index; i<MAX_POOL_SIZE; i++) {
-	// 	if (rfc->nodes_pool[i]->is_free)  {
-	// 		auto stopBeats = steady_clock::now();
-	// 		findFreeCounter += stopBeats - startBeats;
-	// 		return i;
-	// 	}
-	// }
-	// auto stopBeats = steady_clock::now();
-	// findFreeCounter += stopBeats - startBeats;
-	// return -1;
-
-	auto startBeats = steady_clock::now();
-	for (int i=0; i<num_words; i++) {
-		uint64_t n = free_nodes_log[i/64];
-		uint64_t pos = log2(n & -n); 
-		if (pos < 64) {
-			auto stopBeats = steady_clock::now();
-			findFreeCounter += stopBeats - startBeats;
-			return pos;
-		}
-	}
-	auto stopBeats = steady_clock::now();
-	findFreeCounter += stopBeats - startBeats;
-	return -1;
-}
-
-// int count_free_nodes(persistent_ptr<recoverable_fc> rfc) {
-// 	int counter = 0;
-// 	for (int i=0; i<MAX_POOL_SIZE; i++) {
-// 		if (rfc->nodes_pool[i]->is_free)  {
-// 			counter ++;
-// 		}
-// 	}
-// 	return counter;
-// }
 
 
 size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::pool<root> pop, size_t pid) {
-	// auto startBeats = steady_clock::now();
-	// int top_index = reduce(rfc);
 	int top_index = reduce2lists(rfc);
 	persistent_ptr<node> head = rfc->top[(opEpoch/2)%2];
-	// if (top_index != -1) {
 	if (top_index != 0) {
-		// size_t cId = opsList[top_index];
-		// bool cOp = rfc->announce_arr[cId]->name;
-		// if (cOp == PUSH_OP) {
 		size_t cId;
 		bool cOp;
 		if (top_index > 0) { // push
 			top_index --;
-
-			// int freeIndexLowerLim = 0;
 			do {
 				cId = pushList[top_index];
 				cOp = rfc->announce_arr[cId]->name;
-				// int freeIndex = find_free_node(rfc);
-				// if (freeIndex == -1) {
-				// 	std::cerr << "Nodes pool is too small" << std::endl;
-				// 	exit(-1);
-				// }
-				// freeIndexLowerLim ++;
 
-
-				// the problem is that we don't check if pos is bigger than the entire pool.
 				uint64_t pos = -1;
 				for (int i=0; i<num_words; i++) {
 					uint64_t n = free_nodes_log[i/64];
@@ -477,29 +402,21 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 				size_t newParam = rfc->announce_arr[cId]->param;
 				newNode->param = newParam;
 				newNode->next = head;
-				// std::cout << "pos: " << pos << std::endl;
-				// newNode->is_free = false; //change
+				
 				uint64_t n = free_nodes_log[pos/64];
 				uint64_t p = pos % 64;
 				uint64_t b = 0;  // set 0 (not free)
 				uint64_t mask = 1UL << p; 
-				// std::cout << "top_index: " << top_index << ", PUSH, pos: " << p << std::endl;
-				// bin(free_nodes_log[pos/64]);
-				// std::cout << std::endl;
 				free_nodes_log[pos/64] = (n & ~mask) | ((b << p) & mask);
-				// bin(free_nodes_log[pos/64]);
-				// std::cout << std::endl;
 
                 rfc->announce_arr[cId]->val = ACK;
 				pwbCounter3 ++;
 				PWB(&newNode);
 				head = newNode;
 				top_index -- ;
-				// cId = pushList[top_index];
 			} while (top_index != -1);
-			// rfc->top[(opEpoch/2 + 1)%2] = head;
 		}
-		else { // pop. should convert to positive index, and then 
+		else { // pop. should convert to positive index
 			top_index = -1 * top_index - 1;
 			size_t cId;
 			do {
@@ -510,32 +427,18 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 				else {
                     size_t headParam = head->param;
 					rfc->announce_arr[cId]->val = headParam;
-					// head->is_free = true; //
 					uint64_t i = head->index;
 					uint64_t n = free_nodes_log[i/64];
 					uint64_t p = i % 64;
 					uint64_t b = 1;  // set 1 (free)
 					uint64_t mask = 1UL << p; 
-					// std::cout << "top_index: " << top_index << ", POP, pos: " << p << std::endl;
-					// bin(free_nodes_log[i/64]);
-					// std::cout << std::endl;
 					free_nodes_log[i/64] = (n & ~mask) | ((b << p) & mask);
-					// bin(free_nodes_log[i/64]);
-					// std::cout << std::endl;
-
-					// pwbCounter4 ++;
-					// PWB(&head);
 					head = head->next;
 				}
 				top_index -- ;
-				// cId = popList[top_index];
 			} while (top_index != -1);
-			// rfc->top[(opEpoch/2 + 1) % 2] = head;
 		}		
 	}
-    // else { // important !
-    //     rfc->top[(opEpoch/2 + 1) % 2] = rfc->top[(opEpoch/2) % 2];
-    // }
 	rfc->top[(opEpoch/2 + 1) % 2] = head;
 	for (int i=0;i<NN;i++) { //maybe persist on line. check on optane
 		pwbCounter5 ++;
@@ -546,7 +449,6 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 	pfenceCounter3 ++;
 	PFENCE();
 	rfc->cEpoch = rfc->cEpoch + 1;
-	// maybe this is not necessary
 	pwbCounter7 ++;
 	// this is important for the following case: the combiner updates the cEpoch, then several ops started to finish and return, 
 	// BEFORE cEpoch is persisted. then, when the system recovers we can't distinguish between the following cases: 
@@ -554,7 +456,6 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 	// 2. the combiner was in a middle of the combining session (for example).
 	PWB(&rfc->cEpoch);
 	pfenceCounter4 ++;
-	// maybe this is not necessary
 	PFENCE();
 	rfc->cEpoch = rfc->cEpoch + 1;
 	// pwbCounter8 ++;
@@ -562,9 +463,6 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 	// pfenceCounter5 ++;
 	// PFENCE();
 	bool expected = true;
-	// bool combiner = cLock.compare_exchange_strong(expected, false, std::memory_order_release, std::memory_order_relaxed);
-	// auto stopBeats = steady_clock::now();
-	// combineCounter += stopBeats - startBeats;
 	cLock.store(false, std::memory_order_release);
 	size_t value =  try_to_return(rfc, opEpoch, pid);
 	return value;
@@ -592,17 +490,13 @@ size_t op(persistent_ptr<recoverable_fc> rfc, pmem::obj::pool<root> pop, size_t 
 	PFENCE();
 	// if after crash we see valid=true, we can be sure that all announcements were completed
 
-	// pwbCounter10 ++;
-	// PWB(&rfc->announce_arr[pid]);
-	// pfenceCounter7 ++;
-	// PFENCE();
 	rfc->announce_arr[pid]->valid = true;
 
 	size_t value = try_to_take_lock(rfc, opEpoch, pid);
 	if (value != NONE){
 		return value;
 	}
-	opEpoch = rfc->cEpoch; //elaborate
+	opEpoch = rfc->cEpoch;  // this is important for cases in which a late-arriving process eventually gets to be a combiner
 	return combine(rfc, opEpoch, pop, pid);
 }
 
@@ -657,7 +551,7 @@ uint64_t pushPopTest(pmem::obj::pool<root> pop, pmem::obj::persistent_ptr<root> 
 	nanoseconds deltas[numThreads][numRuns];
 	std::atomic<bool> startFlag = { false };
 
-	std::cout << "##### " << "Recoverable FC" << " #####  \n";
+	std::cout << "##### " << "Detectable Flat Combining" << " #####  \n";
 
 	auto pushpop_lambda = [&numThreads, &startFlag,&numPairs, &proot, &pop](nanoseconds *delta, const int tid) {
 		//UserData* ud = new UserData{0,0};
@@ -701,16 +595,14 @@ uint64_t pushPopTest(pmem::obj::pool<root> pop, pmem::obj::persistent_ptr<root> 
 			op(proot->rfc, pop, 0, PUSH_OP, param);
 		}
 		std::thread enqdeqThreads[numThreads];
-		// threads_pool[tid] = std::thread (op, proot->rfc, pop, tid, PUSH_OP, params[tid]);
-		// threads_pool[tid] = std::thread (op, proot->rfc, pop, tid, POP_OP, params[tid]);
-		for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = std::thread(randop_lambda, &deltas[tid][irun], tid);
-		// for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = std::thread(pushpop_lambda, &deltas[tid][irun], tid);
+		// for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = std::thread(randop_lambda, &deltas[tid][irun], tid);
+		for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = std::thread(pushpop_lambda, &deltas[tid][irun], tid);
 		startFlag.store(true);
 		// Sleep for 2 seconds just to let the threads see the startFlag
 		std::this_thread::sleep_for(2s);
 		for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid].join();
 		startFlag.store(false);
-		// should delete poolfile afterwards here
+		// If a pool should be created for each benchmark, poolfile should be deleted here
 	}
 
 	// Sum up all the time deltas of all threads so we can find the median run
@@ -736,12 +628,11 @@ uint64_t pushPopTest(pmem::obj::pool<root> pop, pmem::obj::persistent_ptr<root> 
 int runSeveralTests(pmem::obj::pool<root> pop, pmem::obj::persistent_ptr<root> proot) {
     const std::string dataFilename { DATA_FILE };
     std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 24, 32, 40 };     // For Castor
-	// std::vector<int> threadList = {40};     // For Castor
     const int numRuns = 1;                                           // Number of runs
     const long numPairs = 1*MILLION;                                 // 1M is fast enough on the laptop
 
     uint64_t results[threadList.size()];
-    std::string cName;
+    std::string cName = "DFC";
     // Reset results
     std::memset(results, 0, sizeof(uint64_t)*threadList.size());
 
