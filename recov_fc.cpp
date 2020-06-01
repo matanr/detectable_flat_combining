@@ -37,7 +37,8 @@ using namespace std::literals::chrono_literals;
 #endif
 
 #define N 40  // number of processes
-#define MAX_POOL_SIZE 1000000  // number of nodes in the pool
+// #define MAX_POOL_SIZE 1000000  // number of nodes in the pool
+#define MAX_POOL_SIZE 40  // number of nodes in the pool
 #define ACK -1
 #define EMPTY -2
 #define NONE -3
@@ -163,18 +164,33 @@ void transaction_allocations(persistent_ptr<root> proot, pmem::obj::pool<root> p
 			proot->rfc->announce_arr[pid]->param = NONE;
 			proot->rfc->announce_arr[pid]->valid = false;
 		}
-		for (uint64_t i=0; i < MAX_POOL_SIZE; i++) {
+		for (int i=0; i < MAX_POOL_SIZE; i++) {
 			proot->rfc->nodes_pool[i] = make_persistent<node>();
 			proot->rfc->nodes_pool[i]->param = NONE;
 			proot->rfc->nodes_pool[i]->next = NULL;
 			proot->rfc->nodes_pool[i]->index = i;
 		} 
-		for (uint64_t i=0; i < num_words; i++) {
-			free_nodes_log[i] = ~0;
+		for (int i=0; i < num_words; i++) {
+			free_nodes_log[i] = ~0UL;
 		}
 	});
 }
 
+
+void transaction_deallocations(persistent_ptr<root> proot, pmem::obj::pool<root> pop) {
+	transaction::run(pop, [&] {
+		for (int pid=0; pid<N; pid++) {
+			delete_persistent<announce>(proot->rfc->announce_arr[pid]);
+		}
+		for (int i=0; i < MAX_POOL_SIZE; i++) {
+			delete_persistent<node>(proot->rfc->nodes_pool[i]);
+		} 
+		for (int i=0; i < num_words; i++) {
+			free_nodes_log[i] = ~0UL;
+		}
+		delete_persistent<recoverable_fc>(proot->rfc);
+	});
+}
 
 size_t lock_taken(persistent_ptr<recoverable_fc> rfc, size_t & opEpoch, bool combiner, size_t pid)
 {
@@ -293,20 +309,25 @@ int reduce2lists(persistent_ptr<recoverable_fc> rfc) {
 		if (rfc->announce_arr[i] == NULL) {
 			continue;
 		}
-		size_t opEpoch = rfc->announce_arr[i]->epoch;
-		size_t opVal = rfc->announce_arr[i]->val;
 		bool isOpValid = rfc->announce_arr[i]->valid;
-		if (isOpValid && (opEpoch == rfc->cEpoch || opVal == NONE)) {
-			rfc->announce_arr[i]->epoch = rfc->cEpoch;
-            bool opName = rfc->announce_arr[i]->name;
-            size_t opParam = rfc->announce_arr[i]->param;
-			if (opName == PUSH_OP) {
-				top_push ++;
-				pushList[top_push] = i;
-			}
-			else if (opName == POP_OP) {
-				top_pop ++;
-				popList[top_pop] = i;
+		if (isOpValid){
+			size_t opEpoch = rfc->announce_arr[i]->epoch;
+			size_t opVal = rfc->announce_arr[i]->val;
+			isOpValid = rfc->announce_arr[i]->valid;
+			if (isOpValid && (opEpoch == rfc->cEpoch || opVal == NONE)) {
+				rfc->announce_arr[i]->epoch = rfc->cEpoch;
+				bool opName = rfc->announce_arr[i]->name;
+				size_t opParam = rfc->announce_arr[i]->param;
+				if (opName == PUSH_OP) {
+					top_push ++;
+					pushList[top_push] = i;
+					// std::cout << "saw push: " << i << std::endl;
+				}
+				else if (opName == POP_OP) {
+					top_pop ++;
+					popList[top_pop] = i;
+					// std::cout << "saw pop: " << i << std::endl;
+				}
 			}
 		}
 	}
@@ -326,7 +347,7 @@ int reduce2lists(persistent_ptr<recoverable_fc> rfc) {
 		else if (top_push != -1) {
 			return (top_push + 1);
 		}
-		else {
+		else if (top_pop != -1){
 			return -1 * (top_pop + 1);
 		}
 	}
@@ -335,9 +356,9 @@ int reduce2lists(persistent_ptr<recoverable_fc> rfc) {
 
 void bin(uint64_t n) 
 { 
-    if (n > 1) 
-    bin(n>>1);  
-    printf("%d", n & 1); 
+    if (n > 1UL) 
+    bin(n>>1UL);  
+    printf("%d", n & 1UL); 
 } 
 
 
@@ -356,14 +377,14 @@ void update_free_nodes(persistent_ptr<recoverable_fc> rfc, size_t opEpoch) {
 	// }
 
 	for (int i=0; i<num_words; i++) {
-		free_nodes_log[i] = ~0;
+		free_nodes_log[i] = ~0UL;
 	}
 	auto current = rfc->top[(opEpoch/2)%2];
 	while (current != NULL) {
-		int i = current->index;
+		uint64_t i = current->index;
 		uint64_t n = free_nodes_log[i/64];
-		uint64_t p = i % 64;
-		uint64_t b = 0;
+		uint64_t p = i % 64UL;
+		uint64_t b = 0UL;
 		uint64_t mask = 1UL << p; 
 		free_nodes_log[i/64] = (n & ~mask) | ((b << p) & mask);
 		current = current->next;
@@ -373,12 +394,14 @@ void update_free_nodes(persistent_ptr<recoverable_fc> rfc, size_t opEpoch) {
 
 size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::pool<root> pop, size_t pid) {
 	int top_index = reduce2lists(rfc);
+	// std::cout << "top_index: " << top_index << std::endl;
 	persistent_ptr<node> head = rfc->top[(opEpoch/2)%2];
 	if (top_index != 0) {
 		size_t cId;
 		bool cOp;
 		if (top_index > 0) { // push
-			top_index --;
+			top_index = top_index - 1;
+			// std::cout << "push top_index fixed: " << top_index << std::endl;
 			do {
 				cId = pushList[top_index];
 				cOp = rfc->announce_arr[cId]->name;
@@ -404,10 +427,20 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 				newNode->next = head;
 				
 				uint64_t n = free_nodes_log[pos/64];
-				uint64_t p = pos % 64;
-				uint64_t b = 0;  // set 0 (not free)
+				uint64_t p = pos % 64UL;
+				uint64_t b = 0UL;  // set 0 (not free)
 				uint64_t mask = 1UL << p; 
+
+				// std::cout << "PUSH. free nodes: " << std::endl;
+				// bin(free_nodes_log[0]);
+				// std::cout << std::endl;
+				// std::cout << "p: " << p << ", mask: " << std::endl;
+				// bin(mask);
+				// std::cout << std::endl;
 				free_nodes_log[pos/64] = (n & ~mask) | ((b << p) & mask);
+				// std::cout << "free nodes: " << std::endl;
+				// bin(free_nodes_log[0]);
+				// std::cout << std::endl;
 
                 rfc->announce_arr[cId]->val = ACK;
 				pwbCounter3 ++;
@@ -418,21 +451,33 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 		}
 		else { // pop. should convert to positive index
 			top_index = -1 * top_index - 1;
+			// std::cout << "pop top_index fixed: " << top_index << std::endl;
 			size_t cId;
 			do {
 				cId = popList[top_index];
 				if (head == NULL) {
                     rfc->announce_arr[cId]->val = EMPTY;
+					exit(-1);
 				}
 				else {
                     size_t headParam = head->param;
 					rfc->announce_arr[cId]->val = headParam;
 					uint64_t i = head->index;
 					uint64_t n = free_nodes_log[i/64];
-					uint64_t p = i % 64;
-					uint64_t b = 1;  // set 1 (free)
+					uint64_t p = i % 64UL;
+					uint64_t b = 1UL;  // set 1 (free)
 					uint64_t mask = 1UL << p; 
+
+					// std::cout << "POP. free nodes: " << std::endl;
+					// bin(free_nodes_log[0]);
+					// std::cout << std::endl;
+					// std::cout << "p: " << p << ", mask: " << std::endl;
+					// bin(mask);
+					// std::cout << std::endl;
 					free_nodes_log[i/64] = (n & ~mask) | ((b << p) & mask);
+					// std::cout << "free nodes: " << std::endl;
+					// bin(free_nodes_log[0]);
+					// std::cout << std::endl;
 					head = head->next;
 				}
 				top_index -- ;
@@ -440,7 +485,7 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 		}		
 	}
 	rfc->top[(opEpoch/2 + 1) % 2] = head;
-	for (int i=0;i<NN;i++) { //maybe persist on line. check on optane
+	for (int i=0; i<NN; i++) { //maybe persist on line. check on optane
 		pwbCounter5 ++;
 		PWB(&rfc->announce_arr[i]);
 	}
@@ -477,11 +522,18 @@ size_t op(persistent_ptr<recoverable_fc> rfc, pmem::obj::pool<root> pop, size_t 
 	} 
 	// announce
 	rfc->announce_arr[pid]->valid = false;
-	 
+
+	rfc->announce_arr[pid]->val = NONE;
+	rfc->announce_arr[pid]->epoch = opEpoch; 
 	rfc->announce_arr[pid]->param = param;
     rfc->announce_arr[pid]->name = opName;
-	rfc->announce_arr[pid]->epoch = opEpoch;
-	rfc->announce_arr[pid]->val = NONE;
+	
+	
+	// rfc->announce_arr[pid]->param = param;
+    // rfc->announce_arr[pid]->name = opName;
+	// rfc->announce_arr[pid]->epoch = opEpoch;
+	// rfc->announce_arr[pid]->val = NONE;
+	
 	// pwbCounter9 ++;
 	// std::atomic_fetch_add(&pwbCounter9, 1);
 	PWB(&rfc->announce_arr[pid]);
@@ -534,15 +586,20 @@ inline bool is_file_exists (const char* name) {
  * enqueue-dequeue pairs: in each iteration a thread executes an enqueue followed by a dequeue;
  * the benchmark executes 10^8 pairs partitioned evenly among all threads;
  */
-uint64_t pushPopTest(pmem::obj::pool<root> pop, pmem::obj::persistent_ptr<root> proot, int numThreads, const long numPairs, const int numRuns) {
+uint64_t pushPopTest(int numThreads, const long numPairs, const int numRuns) {
 	const uint64_t kNumElements = 0; // Number of initial items in the stack
 	static const long long NSEC_IN_SEC = 1000000000LL;
 	
-	// pmem::obj::pool<root> pop;
-	// pmem::obj::persistent_ptr<root> proot;
+	pmem::obj::pool<root> pop;
+	pmem::obj::persistent_ptr<root> proot;
 
-	// const char* pool_file_name = "poolfile";
 	const char* pool_file_name = PM_FILE_NAME;
+
+	pop = pool<root>::create(pool_file_name, "layout", PM_REGION_SIZE);
+	proot = pop.root();
+	transaction_allocations(proot, pop);
+	std::cout << "Finished allocating!" << std::endl;
+
     size_t params [N];
     size_t ops [N];
     std::thread threads_pool[N];
@@ -603,6 +660,11 @@ uint64_t pushPopTest(pmem::obj::pool<root> pop, pmem::obj::persistent_ptr<root> 
 		for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid].join();
 		startFlag.store(false);
 		// If a pool should be created for each benchmark, poolfile should be deleted here
+		transaction_deallocations(proot, pop);
+		/* Cleanup */
+		/* Close persistent pool */
+		pop.close ();	
+		std::remove(pool_file_name);
 	}
 
 	// Sum up all the time deltas of all threads so we can find the median run
@@ -625,9 +687,11 @@ uint64_t pushPopTest(pmem::obj::pool<root> pop, pmem::obj::persistent_ptr<root> 
 
 #define MILLION  1000000LL
 
-int runSeveralTests(pmem::obj::pool<root> pop, pmem::obj::persistent_ptr<root> proot) {
+int runSeveralTests() {
     const std::string dataFilename { DATA_FILE };
-    std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 24, 32, 40 };     // For Castor
+	// vector<int> threadList = { 1, 2, 4, 8, 10, 16, 24, 32, 40 };     // For Castor
+    std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40};     // For Castor
+	// std::vector<int> threadList = { 36, 40 };     // For Castor
     const int numRuns = 1;                                           // Number of runs
     const long numPairs = 1*MILLION;                                 // 1M is fast enough on the laptop
 
@@ -640,7 +704,7 @@ int runSeveralTests(pmem::obj::pool<root> pop, pmem::obj::persistent_ptr<root> p
     for (int it = 0; it < threadList.size(); it++) {
         int nThreads = threadList[it];
         std::cout << "\n----- pstack-ll (push-pop)   threads=" << nThreads << "   pairs=" << numPairs/MILLION << "M   runs=" << numRuns << " -----\n";
-		results[it] = pushPopTest(pop, proot, nThreads, numPairs, numRuns);
+		results[it] = pushPopTest(nThreads, numPairs, numRuns);
 		pwbCounter = pwbCounter1 + pwbCounter2 + pwbCounter3 + pwbCounter4 + pwbCounter5+ pwbCounter6 + pwbCounter7 + pwbCounter8+ pwbCounter9 + pwbCounter10;
 		std::cout << "#pwb/#op: " << pwbCounter / (numPairs*2) << std::endl;
 		std::cout << "#pwb1/#op: " << pwbCounter1 / (numPairs*2) << std::endl;
@@ -693,24 +757,24 @@ int runSeveralTests(pmem::obj::pool<root> pop, pmem::obj::persistent_ptr<root> p
 
 
 int main(int argc, char *argv[]) {
-	pmem::obj::pool<root> pop;
-	pmem::obj::persistent_ptr<root> proot;
+	// pmem::obj::pool<root> pop;
+	// pmem::obj::persistent_ptr<root> proot;
 
-	const char* pool_file_name = PM_FILE_NAME;
-	if (is_file_exists(pool_file_name)) {
-			// open a pmemobj pool
-			pop = pool<root>::open(pool_file_name, "layout");
-			proot = pop.root();
-		}
-		else {
-		// create a pmemobj pool
-			// pop = pool<root>::create(pool_file_name, "layout", PMEMOBJ_MIN_POOL);
-			pop = pool<root>::create(pool_file_name, "layout", PM_REGION_SIZE);
-			proot = pop.root();
-			transaction_allocations(proot, pop);
-			std::cout << "Finished allocating!" << std::endl;
-		}
-	runSeveralTests(pop, proot);
+	// const char* pool_file_name = PM_FILE_NAME;
+	// if (is_file_exists(pool_file_name)) {
+	// 		// open a pmemobj pool
+	// 		pop = pool<root>::open(pool_file_name, "layout");
+	// 		proot = pop.root();
+	// 	}
+	// 	else {
+	// 	// create a pmemobj pool
+	// 		// pop = pool<root>::create(pool_file_name, "layout", PMEMOBJ_MIN_POOL);
+	// 		pop = pool<root>::create(pool_file_name, "layout", PM_REGION_SIZE);
+	// 		proot = pop.root();
+	// 		transaction_allocations(proot, pop);
+	// 		std::cout << "Finished allocating!" << std::endl;
+	// 	}
+	runSeveralTests();
 
 	// pmem::obj::pool<root> pop;
 	// pmem::obj::persistent_ptr<root> proot;
