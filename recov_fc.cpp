@@ -36,9 +36,9 @@ using namespace std::literals::chrono_literals;
 #define PM_FILE_NAME   "/dev/shm/rfc_shared"
 #endif
 
-#define N 40  // number of processes
+#define N 60  // number of processes
 // #define MAX_POOL_SIZE 1000000  // number of nodes in the pool
-#define MAX_POOL_SIZE 40  // number of nodes in the pool
+#define MAX_POOL_SIZE 60  // number of nodes in the pool
 #define ACK -1
 #define EMPTY -2
 #define NONE -3
@@ -50,7 +50,7 @@ const int num_words = MAX_POOL_SIZE / 64 + 1;
 uint64_t free_nodes_log [num_words];
 
 //
-uint64_t free_nodes_log_h1;
+// uint64_t free_nodes_log_h1;
 
 
 // Macros needed for persistence
@@ -104,7 +104,7 @@ int pushList[N];
 int popList[N];
 int opsList[N];
 
-struct alignas(64) announce { // maybe less than 64. 25? probably 32
+struct alignas(32) announce { // maybe less than 64. 25? probably 32
     p<size_t> val;
     p<size_t> epoch;
 	p<bool> name;
@@ -196,7 +196,7 @@ size_t lock_taken(persistent_ptr<recoverable_fc> rfc, size_t & opEpoch, bool com
 {
 	if (combiner == false) {
 		while (rfc->cEpoch <= opEpoch + 1) {
-			std::this_thread::yield();
+			// std::this_thread::yield();
 			if (cLock.load(std::memory_order_acquire) == false && rfc->cEpoch <= opEpoch + 1){
                 return try_to_take_lock(rfc, opEpoch, pid);
 			}
@@ -306,31 +306,32 @@ int reduce2lists(persistent_ptr<recoverable_fc> rfc) {
 		PFENCE(); 
 	}
 	for (size_t i = 0; i < NN; i++) {
-		if (rfc->announce_arr[i] == NULL) {
-			continue;
-		}
 		bool isOpValid = rfc->announce_arr[i]->valid;
+		std::atomic_thread_fence(std::memory_order_release);
 		if (isOpValid){
 			size_t opEpoch = rfc->announce_arr[i]->epoch;
 			size_t opVal = rfc->announce_arr[i]->val;
+			std::atomic_thread_fence(std::memory_order_release);
 			isOpValid = rfc->announce_arr[i]->valid;
 			if (isOpValid && (opEpoch == rfc->cEpoch || opVal == NONE)) {
+				std::atomic_thread_fence(std::memory_order_release);
 				rfc->announce_arr[i]->epoch = rfc->cEpoch;
 				bool opName = rfc->announce_arr[i]->name;
 				size_t opParam = rfc->announce_arr[i]->param;
 				if (opName == PUSH_OP) {
 					top_push ++;
 					pushList[top_push] = i;
-					// std::cout << "saw push: " << i << std::endl;
+					// std::cout << "+" << i << "|";
 				}
 				else if (opName == POP_OP) {
 					top_pop ++;
 					popList[top_pop] = i;
-					// std::cout << "saw pop: " << i << std::endl;
+					// std::cout << "-" << i << "|";
 				}
 			}
 		}
 	}
+	// std::cout << std::endl;
 	size_t cPush;
 	size_t cPop;
 	while((top_push != -1) || (top_pop != -1)) {
@@ -361,6 +362,18 @@ void bin(uint64_t n)
     printf("%d", n & 1UL); 
 } 
 
+
+/* Function to get no of set bits in binary 
+representation of positive integer n */
+unsigned int countSetBits(uint64_t n) 
+{ 
+    uint64_t count = 0UL; 
+    while (n) { 
+        count += n & 1UL; 
+        n >>= 1UL; 
+    } 
+    return count; 
+}
 
 // garbage collection, updates is_free for all nodes in the pool
 void update_free_nodes(persistent_ptr<recoverable_fc> rfc, size_t opEpoch) {
@@ -437,7 +450,18 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 				// std::cout << "p: " << p << ", mask: " << std::endl;
 				// bin(mask);
 				// std::cout << std::endl;
+				// auto before = free_nodes_log[pos/64];
 				free_nodes_log[pos/64] = (n & ~mask) | ((b << p) & mask);
+				// if (countSetBits(before) != countSetBits(free_nodes_log[pos/64]) + 1) {
+				// 	std::cout << "PUSH. before: " << std::endl;
+				// 	bin(before);
+				// 	std::cout << std::endl;
+				// 	std::cout << "after: " << std::endl;
+				// 	bin(free_nodes_log[pos/64]);
+				// 	std::cout << std::endl;
+				// 	exit(-1);
+				// }
+
 				// std::cout << "free nodes: " << std::endl;
 				// bin(free_nodes_log[0]);
 				// std::cout << std::endl;
@@ -474,7 +498,19 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 					// std::cout << "p: " << p << ", mask: " << std::endl;
 					// bin(mask);
 					// std::cout << std::endl;
+
+					// auto before = free_nodes_log[i/64];
 					free_nodes_log[i/64] = (n & ~mask) | ((b << p) & mask);
+					// if (countSetBits(before) != countSetBits(free_nodes_log[i/64]) - 1) {
+					// 	std::cout << "POP. before: " << std::endl;
+					// 	bin(before);
+					// 	std::cout << std::endl;
+					// 	std::cout << "after: " << std::endl;
+					// 	bin(free_nodes_log[i/64]);
+					// 	std::cout << std::endl;
+					// 	exit(-1);
+					// }
+
 					// std::cout << "free nodes: " << std::endl;
 					// bin(free_nodes_log[0]);
 					// std::cout << std::endl;
@@ -507,7 +543,7 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 	// PWB(&rfc->cEpoch); 
 	// pfenceCounter5 ++;
 	// PFENCE();
-	bool expected = true;
+	// bool expected = true;
 	cLock.store(false, std::memory_order_release);
 	size_t value =  try_to_return(rfc, opEpoch, pid);
 	return value;
@@ -523,12 +559,13 @@ size_t op(persistent_ptr<recoverable_fc> rfc, pmem::obj::pool<root> pop, size_t 
 	// announce
 	rfc->announce_arr[pid]->valid = false;
 
+	std::atomic_thread_fence(std::memory_order_release);
 	rfc->announce_arr[pid]->val = NONE;
 	rfc->announce_arr[pid]->epoch = opEpoch; 
 	rfc->announce_arr[pid]->param = param;
     rfc->announce_arr[pid]->name = opName;
 	
-	
+	std::atomic_thread_fence(std::memory_order_release);
 	// rfc->announce_arr[pid]->param = param;
     // rfc->announce_arr[pid]->name = opName;
 	// rfc->announce_arr[pid]->epoch = opEpoch;
@@ -690,8 +727,8 @@ uint64_t pushPopTest(int numThreads, const long numPairs, const int numRuns) {
 int runSeveralTests() {
     const std::string dataFilename { DATA_FILE };
 	// vector<int> threadList = { 1, 2, 4, 8, 10, 16, 24, 32, 40 };     // For Castor
-    std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40};     // For Castor
-	// std::vector<int> threadList = { 36, 40 };     // For Castor
+    // std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40};     // For Castor
+	std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60 };     // For Castor
     const int numRuns = 1;                                           // Number of runs
     const long numPairs = 1*MILLION;                                 // 1M is fast enough on the laptop
 
