@@ -36,23 +36,18 @@ using namespace std::literals::chrono_literals;
 #define PM_FILE_NAME   "/dev/shm/rfc_shared"
 #endif
 
-#define N 60  // number of processes
+#define N 80  // number of processes
 // #define MAX_POOL_SIZE 4000  // number of nodes in the pool
-#define MAX_POOL_SIZE 60  // number of nodes in the pool
+#define MAX_POOL_SIZE 80  // number of nodes in the pool
 #define ACK -1
 #define EMPTY -2
 #define NONE -3
 #define PUSH_OP '1'
 #define POP_OP '0'
 
-#define VALID_ANN(rfc, i)   rfc->announce_arr[i]->announces[toDigit(rfc->announce_arr[i]->valid)]
-#define ANN(rfc, i, valid)   rfc->announce_arr[i]->announces[toDigit(valid)]
+#define VALID_ANN(rfc, i)   rfc->announce_arr[i]->announces[(int)rfc->announce_arr[i]->valid % 10]
+#define ANN(rfc, i, valid)   rfc->announce_arr[i]->announces[(int)valid % 10]
 
-// transforms a char into an int 0-9 digit
-#define toDigit(c) (c-'0')
-
-// transforms an int 0-9 digit into a char
-#define toChar(i) ('0' + i)
 
 
 int NN = N;  // number of processes running now
@@ -187,7 +182,7 @@ void transaction_allocations(persistent_ptr<root> proot, pmem::obj::pool<root> p
 			proot->rfc->announce_arr[pid]->announces[1]->name = NONE;
 			proot->rfc->announce_arr[pid]->announces[1]->param = NONE;
 
-			proot->rfc->announce_arr[pid]->valid = '0';
+			proot->rfc->announce_arr[pid]->valid = 0;
 			
 		}
 		for (int i=0; i < MAX_POOL_SIZE; i++) {
@@ -256,113 +251,42 @@ size_t try_to_return(persistent_ptr<recoverable_fc> rfc, size_t & opEpoch, size_
 	}
 }
 
-
-// int reduce(persistent_ptr<recoverable_fc> rfc) {
-// 	auto startBeats = steady_clock::now();
-// 	int top_index = -1;
-// 	if (rfc->cEpoch%2 == 1) {
-// 		rfc->cEpoch = rfc->cEpoch + 1;
-// 		pwbCounter1 ++;
-// 		PWB(&rfc->cEpoch);
-// 		pfenceCounter1 ++;
-// 		PFENCE(); 
-// 	}
-	
-// 	for (size_t i = 0; i < NN; i++) {
-// 		if (rfc->announce_arr[i] == NULL) {
-// 			continue;
-// 		}
-// 		bool isOpValid = rfc->announce_arr[i]->valid; // next two lines 
-// 		size_t opEpoch = rfc->announce_arr[i]->epoch;
-// 		size_t opVal = rfc->announce_arr[i]->val;
-// 		if (isOpValid && (opEpoch == rfc->cEpoch || opVal == NONE)) {
-// 			rfc->announce_arr[i]->epoch = rfc->cEpoch;
-
-//             bool opName = rfc->announce_arr[i]->name;
-//             size_t opParam = rfc->announce_arr[i]->param;
-// 			if (opName == PUSH_OP) {
-// 				if (top_index == -1) {
-// 					top_index ++;
-// 					opsList[top_index] = i;
-// 				}
-// 				else {
-// 					size_t cId = opsList[top_index];
-// 					bool cOp = rfc->announce_arr[cId]->name;
-// 					if (cOp == PUSH_OP) {
-// 						top_index ++;
-// 						opsList[top_index] = i;
-// 					}
-// 					else {
-// 						rfc->announce_arr[i]->val = ACK;
-// 						rfc->announce_arr[cId]->val = opParam;
-// 						top_index --;
-// 					}
-// 				}
-// 			}
-// 			else if (opName == POP_OP) {
-// 				if (top_index == -1) {
-// 					top_index ++;
-// 					opsList[top_index] = i;
-// 				}
-// 				else {
-// 					size_t cId = opsList[top_index];
-// 					bool cOp = rfc->announce_arr[cId]->name;
-// 					if (cOp == POP_OP) {
-// 						top_index ++;
-// 						opsList[top_index] = i;
-// 					}
-// 					else {
-// 						rfc->announce_arr[cId]->val = ACK;
-// 						size_t pushParam = rfc->announce_arr[cId]->param;
-// 						rfc->announce_arr[i]->val = pushParam;
-// 						top_index --;
-// 					}
-// 				}
-// 			}
-// 		}
-// 	}
-// 	auto stopBeats = steady_clock::now();
-// 	reduceCounter += stopBeats - startBeats;
-// 	return top_index;
-// }
-
 int reduce(persistent_ptr<recoverable_fc> rfc) {
 	int top_push = -1;
 	int top_pop = -1;
 	if (rfc->cEpoch%2 == 1) {
 		rfc->cEpoch = rfc->cEpoch + 1;
-		pwbCounter1 ++;
+		// pwbCounter1 ++;
 		PWB(&rfc->cEpoch);
-		pfenceCounter1 ++;
+		// pfenceCounter1 ++;
 		PFENCE(); 
 	}
 
 	for (size_t i = 0; i < NN; i++) {
 		char validOp = rfc->announce_arr[i]->valid;
-		// v, op = valid
-		// if (v == 0) {
-		size_t opEpoch = ANN(rfc, i, validOp)->epoch;
-		size_t opVal = ANN(rfc, i, validOp)->val;
-		if (opEpoch == rfc->cEpoch || opVal == NONE) {
-			ANN(rfc, i, validOp)->epoch = rfc->cEpoch;
-			char opName = ANN(rfc, i, validOp)->name;
-			size_t opParam = ANN(rfc, i, validOp)->param;
-			if (opName == PUSH_OP) {
-				top_push ++;
-				pushList[top_push] = i;
-				collectedValid[i] = validOp;
+		if ((int) validOp / 10 == 1) {
+			size_t opEpoch = ANN(rfc, i, validOp)->epoch;
+			size_t opVal = ANN(rfc, i, validOp)->val;
+			if (opEpoch == rfc->cEpoch || opVal == NONE) {
+				ANN(rfc, i, validOp)->epoch = rfc->cEpoch;
+				char opName = ANN(rfc, i, validOp)->name;
+				size_t opParam = ANN(rfc, i, validOp)->param;
+				if (opName == PUSH_OP) {
+					top_push ++;
+					pushList[top_push] = i;
+					collectedValid[i] = validOp;
+				}
+				else if (opName == POP_OP) {
+					top_pop ++;
+					popList[top_pop] = i;
+					collectedValid[i] = validOp;
+				}
 			}
-			else if (opName == POP_OP) {
-				top_pop ++;
-				popList[top_pop] = i;
-				collectedValid[i] = validOp;
+			else{
+				collectedValid[i] = NONE;
 			}
-		}
-		else{
-			collectedValid[i] = NONE;
 		}
 	}
-
 	// IMPORTANT! make sure that there is no way that a combined op will change valid after it was collected.
 	// if there is a way, we must change below the collected op and not the other struct
 	size_t cPush;
@@ -499,7 +423,7 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 				}
 
 				ANN(rfc, cId, validOp)->val = ACK;
-				pwbCounter3 ++;
+				// pwbCounter3 ++;
 				PWB(&newNode);
 				head = newNode;
 				top_index -- ;
@@ -512,7 +436,7 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 				cId = popList[top_index];
 				if (head == NULL) {
 					ANN(rfc, cId, collectedValid[cId])->val = EMPTY;
-					// exit(-1);
+					exit(-1);
 				}
 				else {
                     size_t headParam = head->param;
@@ -546,34 +470,33 @@ size_t combine(persistent_ptr<recoverable_fc> rfc, size_t opEpoch, pmem::obj::po
 	for (int i=0; i<NN; i++) { //maybe persist on line. check on optane
 		char validOp = collectedValid[i];
 		if (validOp != NONE) {
-			pwbCounter5 += 2;
+			// pwbCounter5 ++;
 			// PWB(&(ANN(rfc, i, validOp)->val));
 			// PWB(&(ANN(rfc, i, validOp)->epoch));
 			PWB(&ANN(rfc, i, validOp));
-			PWB(&rfc->announce_arr[i]->valid);
+			// PWB(&rfc->announce_arr[i]->valid);
 			// PWB(&rfc->announce_arr[i]);
 		}
 		
 	}
-	pwbCounter6 ++;
+	// pwbCounter6 ++;
 	PWB(&rfc->top[(opEpoch/2 + 1) % 2]);
-	pfenceCounter3 ++;
+	// pfenceCounter3 ++;
 	PFENCE();
 	rfc->cEpoch = rfc->cEpoch + 1;
-	pwbCounter7 ++;
+	// pwbCounter7 ++;
 	// this is important for the following case: the combiner updates the cEpoch, then several ops started to finish and return, 
 	// BEFORE cEpoch is persisted. then, when the system recovers we can't distinguish between the following cases: 
 	// 1. the combiner finished an operation and updated cEpoch (because it is not persisted), and several ops returned
 	// 2. the combiner was in a middle of the combining session (for example).
 	PWB(&rfc->cEpoch);
-	pfenceCounter4 ++;
+	// pfenceCounter4 ++;
 	PFENCE();
 	rfc->cEpoch = rfc->cEpoch + 1;
 	// pwbCounter8 ++;
 	// PWB(&rfc->cEpoch); 
 	// pfenceCounter5 ++;
 	// PFENCE();
-	// bool expected = true;
 	cLock.store(false, std::memory_order_release);
 	size_t value =  try_to_return(rfc, opEpoch, pid);
 	return value;
@@ -587,14 +510,17 @@ size_t op(persistent_ptr<recoverable_fc> rfc, pmem::obj::pool<root> pop, size_t 
 		opEpoch ++;
 	} 
 	// announce
-	char nextOp = toChar(1 - toDigit(rfc->announce_arr[pid]->valid));
+	char nextOp = 1 - ((int)rfc->announce_arr[pid]->valid) % 10;
 	ANN(rfc, pid, nextOp)->val = NONE;
 	ANN(rfc, pid, nextOp)->epoch = opEpoch; 
 	ANN(rfc, pid, nextOp)->param = param;
     ANN(rfc, pid, nextOp)->name = opName;
-	PWB(&ANN(rfc, pid, collectedValid[pid]));
+	PWB(&ANN(rfc, pid, nextOp));
+	// PFENCE();
+	rfc->announce_arr[pid]->valid = nextOp; // combiner still will not collect it
+	PWB(&rfc->announce_arr[pid]->valid);
 	PFENCE();
-	rfc->announce_arr[pid]->valid = nextOp;
+	rfc->announce_arr[pid]->valid = 10 + (int) nextOp; // now the combiner can collect
 	
 	// valid = nextOp, 0 (dont collect nextOp)
 	// pwb(valid)
@@ -633,20 +559,15 @@ size_t op(persistent_ptr<recoverable_fc> rfc, pmem::obj::pool<root> pop, size_t 
 // need to adapt recover
 size_t recover(persistent_ptr<recoverable_fc> rfc, pmem::obj::pool<root> pop, size_t pid, bool opName, size_t param)
 {
-	// valid = op, v
-	// if v == 0 => change to 1
-	// keep recovering regularly
-
-
-
-
-	if (! rfc->announce_arr[pid]->valid) { 
-		// did not announce properly
-		return op(rfc, pop, pid, opName, param);
+	char validOp = rfc->announce_arr[pid]->valid;
+	if ((int) validOp / 10 == 0) { // if not valid - make it valid, i.e. allow the combiner to collect
+		rfc->announce_arr[pid]->valid = 10 + (int) validOp;
 	}
+	// if (! rfc->announce_arr[pid]->valid) { 
+	// 	// did not announce properly
+	// 	return op(rfc, pop, pid, opName, param);
+	// }
 
-    // size_t opEpoch = rfc->announce_arr[pid]->epoch;
-    // size_t opVal = rfc->announce_arr[pid]->val;
 	size_t opEpoch = VALID_ANN(rfc, pid)->epoch;
     size_t opVal = VALID_ANN(rfc, pid)->val;
 	if (opVal != NONE and rfc->cEpoch >= opEpoch + 1) {
@@ -780,7 +701,7 @@ int runSeveralTests() {
     const std::string dataFilename { DATA_FILE };
 	// vector<int> threadList = { 1, 2, 4, 8, 10, 16, 24, 32, 40 };     // For Castor
     // std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40};     // For Castor
-	std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60 };     // For Castor
+	std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 64, 68, 72, 76, 80 };     // For Castor
     const int numRuns = 1;                                           // Number of runs
     const long numPairs = 1*MILLION;                                 // 1M is fast enough on the laptop
 
