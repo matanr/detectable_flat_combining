@@ -36,14 +36,19 @@ using namespace std::literals::chrono_literals;
 #define PM_FILE_NAME   "/dev/shm/rfc_shared"
 #endif
 
+#ifdef RECOVERABLE
+#define N 8  // number of processes
+#else  // DETECTABLE
 #define N 80  // number of processes
+#endif
+
 // #define MAX_POOL_SIZE 4000  // number of nodes in the pool
 #define MAX_POOL_SIZE 80  // number of nodes in the pool
 #define ACK -1
 #define EMPTY -2
 #define NONE -3
-#define PUSH_OP '1'
-#define POP_OP '0'
+#define PUSH_OP 1
+#define POP_OP 0
 
 #define VALID_ANN(rfc, i)   rfc->announce_arr[i]->announces[(int)rfc->announce_arr[i]->valid % 10]
 #define ANN(rfc, i, valid)   rfc->announce_arr[i]->announces[(int)valid % 10]
@@ -182,7 +187,11 @@ void transaction_allocations(persistent_ptr<root> proot, pmem::obj::pool<root> p
 			proot->rfc->announce_arr[pid]->announces[1]->name = NONE;
 			proot->rfc->announce_arr[pid]->announces[1]->param = NONE;
 
+#ifdef RECOVERABLE
+            proot->rfc->announce_arr[pid]->valid = -10;                                                               
+#else  // DETECTABLE
 			proot->rfc->announce_arr[pid]->valid = 0;
+#endif		
 			
 		}
 		for (int i=0; i < MAX_POOL_SIZE; i++) {
@@ -335,17 +344,6 @@ unsigned int countSetBits(uint64_t n)
 
 // garbage collection, updates is_free for all nodes in the pool
 void update_free_nodes(persistent_ptr<recoverable_fc> rfc, size_t opEpoch) {
-	// each node is free, unless current top is somehow points to it
-	// for (int i=0; i<MAX_POOL_SIZE; i++) {
-	// 	rfc->nodes_pool[i]->is_free = true;
-	// }
-	// int notfree_count = 0;
-	// auto current = rfc->top[(opEpoch/2)%2];
-	// while (current != NULL) {
-	// 	current->is_free = false;
-	// 	current = current->next;
-	// 	notfree_count ++;
-	// }
 
 	for (int i=0; i<num_words; i++) {
 		free_nodes_log[i] = ~0UL;
@@ -353,6 +351,7 @@ void update_free_nodes(persistent_ptr<recoverable_fc> rfc, size_t opEpoch) {
 	free_nodes_log_h1 = ~0UL;
 	auto current = rfc->top[(opEpoch/2)%2];
 	while (current != NULL) {
+	// 	std::cout << "not free node" << std::endl;
 		uint64_t i = current->index;
 		uint64_t n = free_nodes_log[i/64];
 		uint64_t p = i % 64;
@@ -510,28 +509,25 @@ size_t op(persistent_ptr<recoverable_fc> rfc, pmem::obj::pool<root> pop, size_t 
 		opEpoch ++;
 	} 
 	// announce
+#ifdef RECOVERABLE
+	rfc->announce_arr[pid]->valid = (int) rfc->announce_arr[pid]->valid - 21; // combiner still will not collect it
+	PWB(&rfc->announce_arr[pid]->valid);
+	PFENCE();
+	char nextOp = - ((int)rfc->announce_arr[pid]->valid) % 10;
+#else  // DETECTABLE
 	char nextOp = 1 - ((int)rfc->announce_arr[pid]->valid) % 10;
+#endif		
+	
 	ANN(rfc, pid, nextOp)->val = NONE;
 	ANN(rfc, pid, nextOp)->epoch = opEpoch; 
 	ANN(rfc, pid, nextOp)->param = param;
     ANN(rfc, pid, nextOp)->name = opName;
 	PWB(&ANN(rfc, pid, nextOp));
-	// PFENCE();
+	PFENCE();
 	rfc->announce_arr[pid]->valid = nextOp; // combiner still will not collect it
 	PWB(&rfc->announce_arr[pid]->valid);
 	PFENCE();
 	rfc->announce_arr[pid]->valid = 10 + (int) nextOp; // now the combiner can collect
-	
-	// valid = nextOp, 0 (dont collect nextOp)
-	// pwb(valid)
-	// pfence
-	// valid = nextOp, 1 (collect nextOp)
-
-
-	// rfc->announce_arr[pid]->param = param;
-    // rfc->announce_arr[pid]->name = opName;
-	// rfc->announce_arr[pid]->epoch = opEpoch;
-	// rfc->announce_arr[pid]->val = NONE;
 	
 	// pwbCounter9[pid] ++;
 	// std::atomic_fetch_add(&pwbCounter9, 1);
@@ -559,29 +555,26 @@ size_t op(persistent_ptr<recoverable_fc> rfc, pmem::obj::pool<root> pop, size_t 
 // need to adapt recover
 size_t recover(persistent_ptr<recoverable_fc> rfc, pmem::obj::pool<root> pop, size_t pid, bool opName, size_t param)
 {
-	char validOp = rfc->announce_arr[pid]->valid;
-	if ((int) validOp / 10 == 0) { // if not valid - make it valid, i.e. allow the combiner to collect
-		rfc->announce_arr[pid]->valid = 10 + (int) validOp;
+	if ((int) rfc->announce_arr[pid]->valid / 10 < 0) { 
+		// did not announce properly
+		return op(rfc, pop, pid, opName, param);
 	}
-	// if (! rfc->announce_arr[pid]->valid) { 
-	// 	// did not announce properly
-	// 	return op(rfc, pop, pid, opName, param);
-	// }
 
 	size_t opEpoch = VALID_ANN(rfc, pid)->epoch;
     size_t opVal = VALID_ANN(rfc, pid)->val;
 	if (opVal != NONE and rfc->cEpoch >= opEpoch + 1) {
 		return opVal;
 	}
+	char validOp = rfc->announce_arr[pid]->valid;
+	if ((int) validOp / 10 == 0) { // if not valid - make it valid, i.e. allow the combiner to collect
+		rfc->announce_arr[pid]->valid = 10 + (int) validOp;
+	}
     size_t value = try_to_take_lock(rfc, opEpoch, pid);
 	if (value != NONE){
 		return value;
 	}
-	// garbage collect and update what nodes are free
-    if (! garbage_collected) {
-	    update_free_nodes(rfc, opEpoch);
-        garbage_collected = true;
-    }   
+	opEpoch = rfc->cEpoch;  // this is important for cases in which a late-arriving process eventually gets to be a combiner
+	
 	return combine(rfc, opEpoch, pop, pid);
 }
 
@@ -775,81 +768,87 @@ int runSeveralTests() {
 
 
 int main(int argc, char *argv[]) {
-	// pmem::obj::pool<root> pop;
-	// pmem::obj::persistent_ptr<root> proot;
-
-	// const char* pool_file_name = PM_FILE_NAME;
-	// if (is_file_exists(pool_file_name)) {
-	// 		// open a pmemobj pool
-	// 		pop = pool<root>::open(pool_file_name, "layout");
-	// 		proot = pop.root();
-	// 	}
-	// 	else {
-	// 	// create a pmemobj pool
-	// 		// pop = pool<root>::create(pool_file_name, "layout", PMEMOBJ_MIN_POOL);
-	// 		pop = pool<root>::create(pool_file_name, "layout", PM_REGION_SIZE);
-	// 		proot = pop.root();
-	// 		transaction_allocations(proot, pop);
-	// 		std::cout << "Finished allocating!" << std::endl;
-	// 	}
-	runSeveralTests();
-
-	// pmem::obj::pool<root> pop;
-	// pmem::obj::persistent_ptr<root> proot;
+#ifdef RECOVERABLE
+	pmem::obj::pool<root> pop;
+	pmem::obj::persistent_ptr<root> proot;
 
 	// const char* pool_file_name = "poolfile";
-    // size_t params [N];
-    // size_t ops [N];
-    // std::thread threads_pool[N];
+	const char* pool_file_name = PM_FILE_NAME;
+    size_t params [N];
+    size_t ops [N];
+    std::thread threads_pool[N];
 
-    // for (int pid=0; pid<N; pid++) {
-    //         if (pid % 3 == 1) {
-    //             params[pid] = NONE;
-    //             ops[pid] = POP_OP;
-    //         }
-    //         else {
-    //             params[pid] = pid;
-    //             ops[pid] = PUSH_OP;
-    //         }
-    //     }
+    for (int pid=0; pid<N; pid++) {
+		if (pid % 3 == 1) {
+			params[pid] = NONE;
+			ops[pid] = POP_OP;
+			std::cout << "pop, ";
+		}
+		else {
+			params[pid] = pid;
+			ops[pid] = PUSH_OP;
+			std::cout << "push, ";
+		}
+	}
+	std::cout << std::endl;
 
-	// if (is_file_exists(pool_file_name)) {
-	// 	// open a pmemobj pool
-	// 	pop = pool<root>::open(pool_file_name, "layout");
-	// 	proot = pop.root();
+	if (is_file_exists(pool_file_name)) {
+		// open a pmemobj pool
+		pop = pool<root>::open(pool_file_name, "layout");
+		proot = pop.root();
 
-    //     for (int pid=0; pid<N; pid++) {
-    //         threads_pool[pid] = std::thread (recover, proot->rfc, pop, pid, ops[pid], params[pid]);
-    //     }							      
-	// 	for (int pid=0; pid<N; pid++) {
-	// 		threads_pool[pid].join();
-	// 	}
-	// 	print_state(proot->rfc);
+		std::cout << "printing before recovering" << std::endl;
+		print_state(proot->rfc);
+
+		// garbage collect and update what nodes are free
+		if (! garbage_collected) {
+			update_free_nodes(proot->rfc, proot->rfc->cEpoch);
+			garbage_collected = true;
+		} 
+		
+        for (int pid=0; pid<N; pid++) {
+            threads_pool[pid] = std::thread (recover, proot->rfc, pop, pid, ops[pid], params[pid]);
+        }							      
+		for (int pid=0; pid<N; pid++) {
+			threads_pool[pid].join();
+		}
+		print_state(proot->rfc);
+		std::cout << "finished printing after recovering" << std::endl;
 		
 		
-	// 	for (int pid=0; pid<N; pid++) {
-    //         threads_pool[pid] = std::thread (op, proot->rfc, pop, pid, ops[pid], params[pid]);
-    //     }							      
-	// 	for (int pid=0; pid<N; pid++) {
-	// 		threads_pool[pid].join();
-	// 	}
-	// 	print_state(proot->rfc);
-	// }
-	// else {
-	// 	// create a pmemobj pool
-	// 	pop = pool<root>::create(pool_file_name, "layout", PMEMOBJ_MIN_POOL);
-	// 	proot = pop.root();
-	// 	transaction_allocations(proot, pop);
-	// 	std::cout << "Finished allocating!" << std::endl;
+		for (int pid=0; pid<N; pid++) {
+            threads_pool[pid] = std::thread (op, proot->rfc, pop, pid, ops[pid], params[pid]);
+        }							      
+		for (int pid=0; pid<N; pid++) {
+			threads_pool[pid].join();
+		}
+		print_state(proot->rfc);
+
+		transaction_deallocations(proot, pop);
+		/* Cleanup */
+		/* Close persistent pool */
+		pop.close ();	
+		std::remove(pool_file_name);
+	}
+	else {
+		// create a pmemobj pool
+		// pop = pool<root>::create(pool_file_name, "layout", PMEMOBJ_MIN_POOL);
+		pop = pool<root>::create(pool_file_name, "layout", PM_REGION_SIZE);
+		proot = pop.root();
+		transaction_allocations(proot, pop);
+		std::cout << "Finished allocating!" << std::endl;
 		
-	// 	for (int pid=0; pid<N; pid++) {
-    //         threads_pool[pid] = std::thread (op, proot->rfc, pop, pid, ops[pid], params[pid]);
-    //     }
-	// 	// usleep(1);
-	// 	kill(getpid(), SIGKILL);
-	// 	for (int pid=0; pid<N; pid++) {
-	// 		threads_pool[pid].join();
-	// 	}
-	// 	print_state(proot->rfc);
-	// }
+		for (int pid=0; pid<N; pid++) {
+            threads_pool[pid] = std::thread (op, proot->rfc, pop, pid, ops[pid], params[pid]);
+        }
+		// usleep(1);
+		kill(getpid(), SIGKILL);
+		for (int pid=0; pid<N; pid++) {
+			threads_pool[pid].join();
+		}
+		print_state(proot->rfc);
+	}
+#else  // DETECTABLE
+	runSeveralTests();
+#endif
 }

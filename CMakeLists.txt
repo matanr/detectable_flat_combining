@@ -6,7 +6,9 @@ set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-set (CMAKE_CXX_FLAGS "-g -O2 -DPWB_IS_CLFLUSH -fsanitize=address")
+set (CMAKE_CXX_FLAGS "-g -O2 -DPWB_IS_CLFLUSH -DDETECTABLE -fsanitize=address")
+
+#[[set (CMAKE_CXX_FLAGS "-g -O2 -DPWB_IS_CLFLUSH -DRECOVERABLE -fsanitize=address")]]
 
 include(FindThreads)
 
