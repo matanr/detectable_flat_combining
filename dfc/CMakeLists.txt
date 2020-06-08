@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-set (CMAKE_CXX_FLAGS "-g -O2 -DPWB_IS_CLFLUSH -fsanitize=address")
+set (CMAKE_CXX_FLAGS "-O2 -DPWB_IS_CLFLUSH")
 
 include(FindThreads)
 
@@ -22,6 +22,6 @@ endif()
 
 link_directories(${LIBPMEMOBJ++_LIBRARY_DIRS})
 
-add_executable(dfc global_dfc.cpp)
+add_executable(dfc dfc.cpp)
 target_include_directories(dfc PUBLIC ${LIBPMEMOBJ++_INCLUDE_DIRS} . ..)
 target_link_libraries(dfc ${LIBPMEMOBJ++_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} pmem)
