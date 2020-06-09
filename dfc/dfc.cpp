@@ -414,7 +414,7 @@ size_t combine(persistent_ptr<detectable_fc> dfc, size_t opEpoch, pmem::obj::poo
 				size_t cId = popList[top_index];
 				if (head == NULL) {
 					ANN(dfc, cId, collectedValid[cId])->val = EMPTY;
-					exit(-1);
+					// exit(-1);
 				}
 				else {
                     size_t headParam = head->param;

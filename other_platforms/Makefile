@@ -26,7 +26,7 @@ PMDKLIBS=`pkg-config --libs libpmemobj++`
 CONC_PTM_NAMES := \
 	bin-romlogfc \
 	bin-oflf \
-	# bin-pmdk \
+	bin-pmdk \
 	
 	
 BINARIES_SEQ = \
@@ -60,7 +60,7 @@ bin/pstack-ll-romlogfc: pstack-ll.cpp PBenchmarkStacks.hpp TMLinkedListStackByRe
 	$(CXX) $(CXXFLAGS) -DUSE_ROM_LOG_FC $(PMDKFLAGS) $(PMDKLIBS) $(INCLUDES) pstack-ll.cpp -o bin/pstack-ll-romlogfc -lpthread -lpmem
 
 bin/pstack-ll-pmdk: pstack-ll.cpp PBenchmarkStacks.hpp TMLinkedListStackByRef.hpp pmdk/PMDKTM.hpp
-	$(CXX) $(CXXFLAGS) -DUSE_PMDK $(INCLUDES) $(PMDKLIBS) pstack-ll.cpp -o bin/pstack-ll-pmdk -lpthread -lpmemobj
+	$(CXX) $(CXXFLAGS) -DUSE_PMDK $(PMDKFLAGS) $(PMDKLIBS) $(INCLUDES) pstack-ll.cpp -o bin/pstack-ll-pmdk -lpthread -lpmemobj -lpmem
 
 bin/pstack-ll-oflf: pstack-ll.cpp PBenchmarkStacks.hpp TMLinkedListStackByRef.hpp one_file/OneFilePTMLF.hpp
 	$(CXX) $(CXXFLAGS) -DUSE_OFLF $(PMDKFLAGS) $(PMDKLIBS) $(INCLUDES) pstack-ll.cpp -o bin/pstack-ll-oflf -lpthread -lpmem
