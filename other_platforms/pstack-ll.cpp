@@ -20,14 +20,14 @@
 #define DATA_FILE "data/pstack-ll-romlr.txt"
 #elif defined USE_ROM_LOG_FC
 #include "romulus/RomLogFC.hpp"
-#define DATA_FILE "../data/green-pstack-ll-romlogfc.txt"
+#define DATA_FILE "../data/nvram-pstack-ll-romlogfc.txt"
 #elif defined USE_OFWF
 #include "one_file/OneFilePTMWF.hpp"
-#define DATA_FILE "../data/green-pstack-ll-ofwf.txt"
+#define DATA_FILE "../data/nvram-pstack-ll-ofwf.txt"
 #endif
 
 #ifndef DATA_FILE
-#define DATA_FILE "../data/green-pstack-ll-" PTM_FILEXT ".txt"
+#define DATA_FILE "../data/nvram-pstack-ll-" PTM_FILEXT ".txt"
 #endif
 
 

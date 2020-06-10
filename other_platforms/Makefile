@@ -2,7 +2,7 @@ CXX = g++  #-8
 # CXX = icpc  #-8
 # CXXFLAGS = -std=c++14 -g -O2 -DPWB_IS_CLFLUSHOPT
 # CXXFLAGS = -std=c++14 -g -O2 -DPWB_IS_CLFLUSH
-CXXFLAGS = -std=c++14 -g -O2 -DPWB_IS_PMEM
+CXXFLAGS = -std=c++14 -O2 -DPWB_IS_PMEM
 # CXXFLAGS = -std=c++14 -g -O2 -DPWB_IS_NOP
 # Use these options for castor-1 (Optane DC PM):
 #CXXFLAGS = -std=c++14 -g -O2 -DPWB_IS_CLWB -DPM_REGION_SIZE=4*1024*1024*1024ULL -DPM_FILE_NAME="\"/mnt/pmem0/durable\""    

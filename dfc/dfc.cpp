@@ -24,7 +24,7 @@ using namespace std::chrono;
 using namespace std::literals::chrono_literals;
 
 #ifndef DATA_FILE
-#define DATA_FILE "../data/green-pstack-ll-dfc.txt"
+#define DATA_FILE "../data/nvram-pstack-ll-dfc.txt"
 #endif
 #ifndef PM_REGION_SIZE
 #define PM_REGION_SIZE 1024*1024*1024ULL // 1GB for now
