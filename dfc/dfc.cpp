@@ -110,7 +110,8 @@ int pushList[N];
 int popList[N];
 short collectedValid[N];
 
-struct alignas(32) announce { 
+// struct alignas(32) announce { 
+struct announce { 
     p<size_t> val;
     p<size_t> epoch;
 	p<char> name;
