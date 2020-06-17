@@ -14,6 +14,7 @@
 #include <functional>
 #include <cstring>
 #include <thread>       // Needed by this_thread::yield()
+#include <mutex>
 #include <sys/mman.h>   // Needed if we use mmap()
 #include <sys/types.h>  // Needed by open() and close()
 #include <sys/stat.h>
@@ -64,12 +65,26 @@
   #define PWB(addr)              pmem_flush(addr, sizeof(addr))
   #define PFENCE()               pmem_drain()
   #define PSYNC() 				 {}
+#elif COUNT_PWB
+  #define PWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory") ; romlogfc::localPwbCounter++
+  #define PFENCE()               __asm__ volatile("sfence" : : : "memory") ; romlogfc::localPfenceCounter++
+  #define PSYNC()                __asm__ volatile("sfence" : : : "memory") ; romlogfc::localPsyncCounter++
 #else
 #error "You must define what PWB is. Choose PWB_IS_CLFLUSHOPT if you don't know what your CPU is capable of"
 #endif
 
 
+
 namespace romlogfc {
+
+std::mutex pLock; // Used to add local PWB and PFENCE instructions count to the global variables
+
+thread_local int localPwbCounter = 0;
+thread_local int localPfenceCounter = 0;
+thread_local int localPsyncCounter = 0;
+int pwbCounter = 0;
+int pfenceCounter = 0;
+thread_local int psyncCounter = 0;
 
 //
 // User configurable variables.

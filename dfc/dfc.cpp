@@ -9,6 +9,7 @@
 #include <iostream>
 #include <unistd.h>
 #include <thread>
+#include <mutex>
 #include <libpmemobj++/make_persistent_array.hpp>
 #include <libpmemobj++/make_persistent.hpp>
 #include <libpmemobj++/p.hpp>
@@ -24,7 +25,10 @@ using namespace std::chrono;
 using namespace std::literals::chrono_literals;
 
 #ifndef DATA_FILE
-#define DATA_FILE "../data/nvram-pstack-ll-dfc.txt"
+#define DATA_FILE "../data/green-pstack-ll-dfc.txt"
+#endif
+#ifndef PDATA_FILE
+#define PDATA_FILE "../data/pwb-pfence-dfc.txt"
 #endif
 #ifndef PM_REGION_SIZE
 #define PM_REGION_SIZE 1024*1024*1024ULL // 1GB for now
@@ -67,30 +71,48 @@ uint64_t free_nodes_log_h1;
    */
   #define PWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory")                      // Broadwell only works with this.
   #define PFENCE()               {}                                                                             // No ordering fences needed for CLFLUSH (section 7.4.6 of Intel manual)
-  #define PSYNC()                {}                                                                             // For durability it's not obvious, but CLFLUSH seems to be enough, and PMDK uses the same approach
+  #define PSYNC()                {}  
+  #define PPWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory")  // parallel PWB
+  #define PPFENCE()               {} // parallel PFENCE
 #elif PWB_IS_CLFLUSH
   #define PWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory")
   #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
   #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
+  #define PPWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory") // parallel PWB
+  #define PPFENCE()               __asm__ volatile("sfence" : : : "memory") // parallel PFENCE
 #elif PWB_IS_CLWB
   /* Use this for CPUs that support clwb, such as the SkyLake SP series (c5 compute intensive instances in AWS are an example of it) */
   #define PWB(addr)              __asm__ volatile(".byte 0x66; xsaveopt %0" : "+m" (*(volatile char *)(addr)))  // clwb() only for Ice Lake onwards
   #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
   #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
+  #define PPWB(addr)              __asm__ volatile(".byte 0x66; xsaveopt %0" : "+m" (*(volatile char *)(addr))) // parallel PWB
+  #define PPFENCE()               __asm__ volatile("sfence" : : : "memory") // parallel PFENCE
 #elif PWB_IS_NOP
   /* pwbs are not needed for shared memory persistency (i.e. persistency across process failure) */
   #define PWB(addr)              {}
   #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
   #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
+  #define PPWB(addr)              {} // parallel PWB
+  #define PPFENCE()               __asm__ volatile("sfence" : : : "memory") // parallel PFENCE
 #elif PWB_IS_CLFLUSHOPT
   /* Use this for CPUs that support clflushopt, which is most recent x86 */
   #define PWB(addr)              __asm__ volatile(".byte 0x66; clflush %0" : "+m" (*(volatile char *)(addr)))    // clflushopt (Kaby Lake)
   #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
   #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
+  #define PPWB(addr)              __asm__ volatile(".byte 0x66; clflush %0" : "+m" (*(volatile char *)(addr))) // parallel PWB
+  #define PPFENCE()               __asm__ volatile("sfence" : : : "memory") // parallel PFENCE
 #elif PWB_IS_PMEM
   #define PWB(addr)              pmem_flush(addr, sizeof(addr))
   #define PFENCE()               pmem_drain()
   #define PSYNC() 				 {}
+  #define PPWB(addr)              pmem_flush(addr, sizeof(addr)) // parallel PWB
+  #define PPFENCE()               pmem_drain() // parallel PFENCE
+#elif COUNT_PWB
+  #define PWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory") ; localPwbCounter++
+  #define PFENCE()               __asm__ volatile("sfence" : : : "memory") ; localPfenceCounter++
+  #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
+  #define PPWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory") ; localParallelPwbCounter++
+  #define PPFENCE()               __asm__ volatile("sfence" : : : "memory") ; localParallelPfenceCounter++
 #else
 #error "You must define what PWB is. Choose PWB_IS_CLFLUSHOPT if you don't know what your CPU is capable of"
 #endif
@@ -98,13 +120,17 @@ uint64_t free_nodes_log_h1;
 
 std::atomic<bool> cLock {false};    // holds true when locked, holds false when unlocked
 std::atomic<int> gRecoveryLock {0}; // holds 1 when locked, holds 0 when unlocked, holds 2 when it was locked once
+std::mutex pLock; // Used to add local PWB and PFENCE instructions count to the global variables
 
+thread_local int localPwbCounter = 0;
+thread_local int localPfenceCounter = 0;
+int pwbCounter = 0;
+int pfenceCounter = 0;
 
-int pwbCounter = 0; int pwbCounter1=0; int pwbCounter2=0; int pwbCounter3=0; int pwbCounter4=0; int pwbCounter5=0; int pwbCounter6=0; int pwbCounter7=0; int pwbCounter8=0; int pwbCounter10=0;
-int pfenceCounter = 0; int pfenceCounter1=0; int pfenceCounter2=0; int pfenceCounter3=0; int pfenceCounter4=0; int pfenceCounter5=0; int pfenceCounter7=0;
-// int pwbCounter9[N];
-// int pfenceCounter6[N];
-nanoseconds combineCounter = 0ns; nanoseconds reduceCounter = 0ns; nanoseconds findFreeCounter = 0ns; 
+thread_local int localParallelPwbCounter = 0;
+thread_local int localParallelPfenceCounter = 0;
+int pwbParallelCounter = 0;
+int pfenceParallelCounter = 0;
 
 int pushList[N];
 int popList[N];
@@ -496,11 +522,11 @@ size_t op(persistent_ptr<detectable_fc> dfc, pmem::obj::pool<root> pop, size_t p
 	ANN(dfc, pid, nextOp)->param = param;
     ANN(dfc, pid, nextOp)->name = opName;
 	
-	PWB(&ANN(dfc, pid, nextOp));
-	PFENCE();
+	PPWB(&ANN(dfc, pid, nextOp));
+	PPFENCE();
 	dfc->announce_arr[pid]->valid = nextOp; // combiner still will not collect it
-	PWB(&dfc->announce_arr[pid]->valid);
-	PFENCE();
+	PPWB(&dfc->announce_arr[pid]->valid);
+	PPFENCE();
 	dfc->announce_arr[pid]->valid = 10 + nextOp; // now the combiner can collect
 	
 	// pwbCounter9[pid] ++;
@@ -601,7 +627,7 @@ inline bool is_file_exists (const char* name) {
  * enqueue-dequeue pairs: in each iteration a thread executes an enqueue followed by a dequeue;
  * the benchmark executes 10^8 pairs partitioned evenly among all threads;
  */
-uint64_t pushPopTest(int numThreads, const long numPairs, const int numRuns) {
+std::tuple<uint64_t, double, double> pushPopTest(int numThreads, const long numPairs, const int numRuns) {
 	const uint64_t kNumElements = 0; // Number of initial items in the stack
 	static const long long NSEC_IN_SEC = 1000000000LL;
 	
@@ -637,6 +663,11 @@ uint64_t pushPopTest(int numThreads, const long numPairs, const int numRuns) {
 		}
 		auto stopBeats = steady_clock::now();
 		*delta = stopBeats - startBeats;
+		std::lock_guard<std::mutex> lock(pLock);
+		pwbCounter += localPwbCounter;
+		pfenceCounter += localPfenceCounter;
+		pwbParallelCounter += localParallelPwbCounter;
+		pfenceParallelCounter += localParallelPfenceCounter;
 	};
 
 	auto randop_lambda = [&numThreads, &startFlag,&numPairs, &proot, &pop](nanoseconds *delta, const int tid) {
@@ -697,7 +728,23 @@ uint64_t pushPopTest(int numThreads, const long numPairs, const int numRuns) {
 	auto median = agg[numRuns/2].count()/numThreads; // Normalize back to per-thread time (mean of time for this run)
 
 	std::cout << "Total Ops/sec = " << numPairs*2*NSEC_IN_SEC/median << "\n";
-	return (numPairs*2*NSEC_IN_SEC/median);
+	#if defined(COUNT_PWB)
+		double pwbPerOp = double(pwbCounter) / double(numPairs*2);
+		double pfencePerOp = double(pfenceCounter) / double(numPairs*2);
+		double pwbParallelPerOp = double(pwbParallelCounter) / double(numPairs*2);
+		double pfenceParallelPerOp = double(pfenceParallelCounter) / double(numPairs*2);
+		std::cout << "#pwb/#op: " << std::fixed << pwbPerOp;
+		std::cout << ", #pfence/#op: " << std::fixed << pfencePerOp;
+		std::cout << ", T #pwb/#op: " << std::fixed << pwbPerOp + pwbParallelPerOp;
+		std::cout << ", T #pfence/#op: " << std::fixed << pfencePerOp + pfenceParallelPerOp << std::endl;
+		// std::cout << ", Total #pwb/#op (parallel PWBs included): " << std::fixed << pwbPerOp + pwbParallelPerOp;
+		// std::cout << "#Total pfence/#op (parallel PFENCEs included): " << std::fixed << pfencePerOp + pfenceParallelPerOp << std::endl;
+		
+		pwbCounter = 0; pfenceCounter = 0; pwbParallelCounter = 0; pfenceParallelCounter = 0;
+		localPwbCounter = 0; localPfenceCounter = 0; localParallelPwbCounter = 0; localParallelPfenceCounter = 0;
+        return std::make_tuple(numPairs*2*NSEC_IN_SEC/median, pwbPerOp, pfencePerOp);
+	#endif
+	return std::make_tuple(numPairs*2*NSEC_IN_SEC/median, 0, 0);
 }
 
 
@@ -705,13 +752,14 @@ uint64_t pushPopTest(int numThreads, const long numPairs, const int numRuns) {
 
 int runSeveralTests() {
     const std::string dataFilename { DATA_FILE };
+	const std::string pdataFilename { PDATA_FILE };
 	// vector<int> threadList = { 1, 2, 4, 8, 10, 16, 24, 32, 40 };     // For Castor
     // std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40};     // For Castor
 	std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 64, 68, 72, 76, 80 };     // For Castor
     const int numRuns = 1;                                           // Number of runs
     const long numPairs = 1*MILLION;                                 // 1M is fast enough on the laptop
 
-    uint64_t results[threadList.size()];
+    std::tuple<uint64_t, double, double> results[threadList.size()];
     std::string cName = "DFC";
     // Reset results
     std::memset(results, 0, sizeof(uint64_t)*threadList.size());
@@ -721,43 +769,6 @@ int runSeveralTests() {
         int nThreads = threadList[it];
         std::cout << "\n----- pstack-ll (push-pop)   threads=" << nThreads << "   pairs=" << numPairs/MILLION << "M   runs=" << numRuns << " -----\n";
 		results[it] = pushPopTest(nThreads, numPairs, numRuns);
-		int sumPwbCounter9 = 0;
-		// for (int i=0; i<NN; i++) {
-		// 	sumPwbCounter9 += pwbCounter9[i];
-		// 	pwbCounter9[i] = 0;
-		// }
-		pwbCounter = pwbCounter1 + pwbCounter2 + pwbCounter3 + pwbCounter4 + pwbCounter5+ pwbCounter6 + pwbCounter7 + pwbCounter8+ sumPwbCounter9 + pwbCounter10;
-		std::cout << "#pwb/#op: " << pwbCounter / (numPairs*2) << std::endl;
-		std::cout << "#pwb1/#op: " << pwbCounter1 / (numPairs*2) << std::endl;
-		std::cout << "#pwb2/#op: " << pwbCounter2 / (numPairs*2) << std::endl;
-		std::cout << "#pwb3/#op: " << pwbCounter3 / (numPairs*2) << std::endl;
-		std::cout << "#pwb4/#op: " << pwbCounter4 / (numPairs*2) << std::endl;
-		std::cout << "#pwb5/#op: " << pwbCounter5 / (numPairs*2) << std::endl;
-		std::cout << "#pwb6/#op: " << pwbCounter6 / (numPairs*2) << std::endl;
-		std::cout << "#pwb7/#op: " << pwbCounter7 / (numPairs*2) << std::endl;
-		std::cout << "#pwb8/#op: " << pwbCounter8 / (numPairs*2) << std::endl;
-		std::cout << "#pwb9/#op: " << sumPwbCounter9 / (numPairs*2) << std::endl;
-		std::cout << "#pwb10/#op: " << pwbCounter10 / (numPairs*2) << std::endl;
-		int sumPfenceCounter6 = 0;
-		// for (int i=0; i<NN; i++) {
-		// 	sumPfenceCounter6 += pfenceCounter6[i];
-		// 	pfenceCounter6[i] = 0;
-		// }
-		pfenceCounter = pfenceCounter1 + pfenceCounter2 + pfenceCounter3 + pfenceCounter4 + pfenceCounter5+ sumPfenceCounter6 + pfenceCounter7;
-		std::cout << "#pfence/#op: " << pfenceCounter / (numPairs*2) << std::endl;
-		std::cout << "#pfence1/#op: " << pfenceCounter1 / (numPairs*2) << std::endl;
-		std::cout << "#pfence2/#op: " << pfenceCounter2 / (numPairs*2) << std::endl;
-		std::cout << "#pfence3/#op: " << pfenceCounter3 / (numPairs*2) << std::endl;
-		std::cout << "#pfence4/#op: " << pfenceCounter4 / (numPairs*2) << std::endl;
-		std::cout << "#pfence5/#op: " << pfenceCounter5 / (numPairs*2) << std::endl;
-		std::cout << "#pfence6/#op: " << sumPfenceCounter6 / (numPairs*2) << std::endl;
-		std::cout << "#pfence7/#op: " << pfenceCounter7 / (numPairs*2) << std::endl;
-		pwbCounter = 0; pwbCounter1=0; pwbCounter2=0; pwbCounter3=0; pwbCounter4=0; pwbCounter5=0; pwbCounter6=0; pwbCounter7=0; pwbCounter8=0; pwbCounter10=0;
-		pfenceCounter = 0; pfenceCounter1=0; pfenceCounter2=0; pfenceCounter3=0; pfenceCounter4=0; pfenceCounter5=0; pfenceCounter7=0;
-		std::cout << "combiner total time: " << combineCounter.count() << std::endl;
-		std::cout << "reduce total time: " << reduceCounter.count() << std::endl;
-		std::cout << "find_free_node total time: " << findFreeCounter.count() << std::endl;
-		combineCounter = 0ns; reduceCounter = 0ns; findFreeCounter = 0ns; 
     }
 
     // Export tab-separated values to a file to be imported in gnuplot or excel
@@ -769,11 +780,29 @@ int runSeveralTests() {
     dataFile << "\n";
     for (int it = 0; it < threadList.size(); it++) {
         dataFile << threadList[it] << "\t";
-        dataFile << results[it] << "\t";
+        dataFile << std::get<0>(results[it]) << "\t";
         dataFile << "\n";
     }
     dataFile.close();
     std::cout << "\nSuccessfuly saved results in " << dataFilename << "\n";
+
+	#if defined(COUNT_PWB)
+    // Export tab-separated values to a file to be imported in gnuplot or excel
+    std::ofstream pdataFile;
+    pdataFile.open(pdataFilename);
+    pdataFile << "Threads\t";
+    // Printf class names for each column
+    pdataFile << "PWB" << "\t" << "PFENCE" << "\t";
+    pdataFile << "\n";
+    for (int it = 0; it < threadList.size(); it++) {
+        pdataFile << threadList[it] << "\t";
+        pdataFile << std::get<1>(results[it]) << "\t";
+        pdataFile << std::get<2>(results[it]) << "\t";
+        pdataFile << "\n";
+    }
+    pdataFile.close();
+    std::cout << "\nSuccessfuly saved results in " << pdataFilename << "\n";
+    #endif
 
     return 0;
 }

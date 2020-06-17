@@ -23,7 +23,7 @@
 #include <unistd.h>     // Needed by close()
 
 #include <libpmem.h>
-
+#include <mutex>
 /*
  * <h1> Romulus Log </h1>
  * This is a special version of Romulus Log that is meant for comparing in the sequential SPS.
@@ -64,6 +64,10 @@
   #define PWB(addr)              pmem_flush(addr, sizeof(addr))
   #define PFENCE()               pmem_drain()
   #define PSYNC() 				 {}
+#elif COUNT_PWB
+  #define PWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory") ; poflf::localPwbCounter++
+  #define PFENCE()               __asm__ volatile("sfence" : : : "memory") ; poflf::localPfenceCounter++
+  #define PSYNC()                __asm__ volatile("sfence" : : : "memory") ; poflf::localPsyncCounter++
 #else
 #error "You must define what PWB is. Choose PWB_IS_CLFLUSHOPT if you don't know what your CPU is capable of"
 #endif
@@ -107,6 +111,15 @@
  * - The persistent logs are allocated in PM, same as all user allocations from tmNew(), 'curTx', and 'request'
  */
 namespace poflf {
+
+std::mutex pLock; // Used to add local PWB and PFENCE instructions count to the global variables
+
+thread_local int localPwbCounter = 0;
+thread_local int localPfenceCounter = 0;
+thread_local int localPsyncCounter = 0;
+int pwbCounter = 0;
+int pfenceCounter = 0;
+thread_local int psyncCounter = 0;
 
 // Size of the persistent memory region
 #ifndef PM_REGION_SIZE

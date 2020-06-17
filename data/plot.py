@@ -13,16 +13,12 @@ def plot_files(files):
 
         with open(file) as f:
             first_line = f.readline().strip()
-            print("line:")
-            print(first_line)
             name = first_line.split()[1]
-            print("name:")
-            print(name)
         plt.plot(x, y, label=name)
 
     plt.xlabel('Threads')
     plt.ylabel('Ops/sec')
-    plt.title('Comparison on 32 cores with 2 hyper-threads per core')
+    plt.title('Comparison on 32 cores on nvram')
     plt.legend()
     plt.show()
 

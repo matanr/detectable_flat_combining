@@ -12,6 +12,7 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include <mutex>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -20,6 +21,14 @@
 
 using namespace std;
 using namespace chrono;
+
+#if defined(USE_ROM_LOG_FC) && defined(COUNT_PWB)
+#include "romulus/RomLogFC.hpp"
+using namespace romlogfc;
+#elif defined(USE_OFLF) && defined(COUNT_PWB)
+#include "one_file/OneFilePTMLF.hpp"
+using namespace poflf;
+#endif
 
 struct UserData  {
     long long seq;
@@ -94,7 +103,7 @@ public:
      * the benchmark executes 10^8 pairs partitioned evenly among all threads;
      */
     template<typename STACK, typename PTM>
-    uint64_t pushPop(std::string& className, const long numPairs, const int numRuns) {
+    tuple<uint64_t, double, double> pushPop(std::string& className, const long numPairs, const int numRuns) {
         cout << "in push pop" << endl;
         nanoseconds deltas[numThreads][numRuns];
         atomic<bool> startFlag = { false };
@@ -118,6 +127,12 @@ public:
             }
             auto stopBeats = steady_clock::now();
             *delta = stopBeats - startBeats;
+            #if defined(COUNT_PWB) && (defined(USE_ROM_LOG_FC) || defined(USE_OFLF))
+            std::lock_guard<std::mutex> lock(pLock);
+            pwbCounter += localPwbCounter;
+            pfenceCounter += localPfenceCounter;
+            psyncCounter += localPsyncCounter;
+            #endif
         };
 
         auto randop_lambda = [this,&startFlag,&numPairs,&stack](nanoseconds *delta, const int tid) {
@@ -180,7 +195,20 @@ public:
         auto median = agg[numRuns/2].count()/numThreads; // Normalize back to per-thread time (mean of time for this run)
 
         cout << "Total Ops/sec = " << numPairs*2*NSEC_IN_SEC/median << "\n";
-        return (numPairs*2*NSEC_IN_SEC/median);
+
+        #if defined(COUNT_PWB) && (defined(USE_ROM_LOG_FC) || defined(USE_OFLF))
+        double pwbPerOp = double(pwbCounter) / double(numPairs*2);
+		double pfencePerOp = double(pfenceCounter) / double(numPairs*2);
+        double psyncPerOp = double(psyncCounter) / double(numPairs*2);
+		cout << "#pwb/#op: " << fixed << pwbPerOp;
+		cout << ", #pfence/#op: " << fixed << pfencePerOp;
+        cout << ", #psync/#op: " << fixed << psyncPerOp << endl;
+
+		pwbCounter = 0; pfenceCounter = 0; psyncCounter = 0; 
+		localPwbCounter = 0; localPfenceCounter = 0; localPsyncCounter = 0;
+        return make_tuple(numPairs*2*NSEC_IN_SEC/median, pwbPerOp, pfencePerOp);
+        #endif
+        return make_tuple(numPairs*2*NSEC_IN_SEC/median, 0, 0);
     }
 
 };

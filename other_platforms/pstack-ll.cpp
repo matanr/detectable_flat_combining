@@ -20,14 +20,19 @@
 #define DATA_FILE "data/pstack-ll-romlr.txt"
 #elif defined USE_ROM_LOG_FC
 #include "romulus/RomLogFC.hpp"
-#define DATA_FILE "../data/nvram-pstack-ll-romlogfc.txt"
+#define DATA_FILE "../data/green-pstack-ll-romlogfc.txt"
+#define PDATA_FILE "../data/pwb-pfence-romlogfc.txt"
 #elif defined USE_OFWF
 #include "one_file/OneFilePTMWF.hpp"
-#define DATA_FILE "../data/nvram-pstack-ll-ofwf.txt"
+#define DATA_FILE "../data/green-pstack-ll-ofwf.txt"
 #endif
 
 #ifndef DATA_FILE
-#define DATA_FILE "../data/nvram-pstack-ll-" PTM_FILEXT ".txt"
+#define DATA_FILE "../data/green-pstack-ll-" PTM_FILEXT ".txt"
+#endif
+
+#ifndef PDATA_FILE
+#define PDATA_FILE "../data/pwb-pfence-" PTM_FILEXT ".txt"
 #endif
 
 
@@ -35,12 +40,13 @@
 
 int main(void) {
     const std::string dataFilename { DATA_FILE };
+    const std::string pdataFilename { PDATA_FILE };
     // vector<int> threadList = { 1, 2, 4, 8, 10, 16, 24, 32, 40 };     // For Castor
     std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 64, 68, 72, 76, 80 };     // For Castor
     const int numRuns = 1;                                           // Number of runs
     const long numPairs = 1*MILLION;                                 // 1M is fast enough on the laptop
 
-    uint64_t results[threadList.size()];
+    tuple<uint64_t, double, double> results[threadList.size()];
     std::string cName;
     // Reset results
     std::memset(results, 0, sizeof(uint64_t)*threadList.size());
@@ -61,7 +67,7 @@ int main(void) {
 #elif defined USE_ROMLOG
             results[it] = bench.pushPop<TMLinkedListStackByRef<uint64_t,romuluslog::RomulusLog,romuluslog::persist>, romuluslog::RomulusLog>  (cName, numPairs, numRuns);
 #elif defined USE_ROM_LOG_FC
-            results[it] = bench.pushPop<TMLinkedListStackByRef<uint64_t,romlogfc::RomLog,romlogfc::persist>, romlogfc::RomLog>  (cName, numPairs, numRuns);
+            results[it] = bench.pushPop<TMLinkedListStackByRef<uint64_t,romlogfc::RomLog,romlogfc::persist>,         romlogfc::RomLog>  (cName, numPairs, numRuns);
 #elif defined USE_OFWF
             results[it] = bench.pushPop<TMLinkedListStack<uint64_t,pofwf::OneFileWF,pofwf::tmtype>,                  pofwf::OneFileWF>        (cName, numPairs, numRuns);
 #elif defined USE_DUALZONE_2F_FC
@@ -94,11 +100,29 @@ int main(void) {
     dataFile << "\n";
     for (int it = 0; it < threadList.size(); it++) {
         dataFile << threadList[it] << "\t";
-        dataFile << results[it] << "\t";
+        dataFile << get<0>(results[it]) << "\t";
         dataFile << "\n";
     }
     dataFile.close();
     std::cout << "\nSuccessfuly saved results in " << dataFilename << "\n";
+
+    #if defined(COUNT_PWB) && (defined(USE_ROM_LOG_FC) || defined(USE_OFLF))
+    // Export tab-separated values to a file to be imported in gnuplot or excel
+    ofstream pdataFile;
+    pdataFile.open(pdataFilename);
+    pdataFile << "Threads\t";
+    // Printf class names for each column
+    pdataFile << "PWB" << "\t" << "PFENCE" << "\t";
+    pdataFile << "\n";
+    for (int it = 0; it < threadList.size(); it++) {
+        pdataFile << threadList[it] << "\t";
+        pdataFile << get<1>(results[it]) << "\t";
+        pdataFile << get<2>(results[it]) << "\t";
+        pdataFile << "\n";
+    }
+    pdataFile.close();
+    std::cout << "\nSuccessfuly saved results in " << pdataFilename << "\n";
+    #endif
 
     return 0;
 }
