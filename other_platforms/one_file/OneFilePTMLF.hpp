@@ -23,7 +23,6 @@
 #include <unistd.h>     // Needed by close()
 
 #include <libpmem.h>
-#include <mutex>
 /*
  * <h1> Romulus Log </h1>
  * This is a special version of Romulus Log that is meant for comparing in the sequential SPS.
@@ -32,7 +31,7 @@
 
 
 // Macros needed for persistence
-#ifdef PWB_IS_CLFLUSH_PFENCE_NOP
+#if defined(PWB_IS_CLFLUSH_PFENCE_NOP)
   /*
    * More info at http://elixir.free-electrons.com/linux/latest/source/arch/x86/include/asm/special_insns.h#L213
    * Intel programming manual at https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-optimization-manual.pdf
@@ -41,67 +40,42 @@
   #define PWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory")                      // Broadwell only works with this.
   #define PFENCE()               {}                                                                             // No ordering fences needed for CLFLUSH (section 7.4.6 of Intel manual)
   #define PSYNC()                {}                                                                             // For durability it's not obvious, but CLFLUSH seems to be enough, and PMDK uses the same approach
-#elif PWB_IS_CLFLUSH
+#elif defined(PWB_IS_CLFLUSH)
   #define PWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory")
   #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
   #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
-#elif PWB_IS_CLWB
+#elif defined(PWB_IS_CLWB)
   /* Use this for CPUs that support clwb, such as the SkyLake SP series (c5 compute intensive instances in AWS are an example of it) */
   #define PWB(addr)              __asm__ volatile(".byte 0x66; xsaveopt %0" : "+m" (*(volatile char *)(addr)))  // clwb() only for Ice Lake onwards
   #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
   #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
-#elif PWB_IS_NOP
+#elif defined(PWB_IS_NOP)
   /* pwbs are not needed for shared memory persistency (i.e. persistency across process failure) */
   #define PWB(addr)              {}
   #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
   #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
-#elif PWB_IS_CLFLUSHOPT
+#elif defined(PWB_IS_CLFLUSHOPT)
   /* Use this for CPUs that support clflushopt, which is most recent x86 */
   #define PWB(addr)              __asm__ volatile(".byte 0x66; clflush %0" : "+m" (*(volatile char *)(addr)))    // clflushopt (Kaby Lake)
   #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
   #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
-#elif PWB_IS_PMEM
+#elif defined(PWB_IS_PMEM)
   #define PWB(addr)              pmem_flush(addr, sizeof(addr))
   #define PFENCE()               pmem_drain()
   #define PSYNC() 				 {}
-#elif COUNT_PWB
-  #define PWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory") ; poflf::localPwbCounter++
-  #define PFENCE()               __asm__ volatile("sfence" : : : "memory") ; poflf::localPfenceCounter++
-  #define PSYNC()                __asm__ volatile("sfence" : : : "memory") ; poflf::localPsyncCounter++
+#elif defined(COUNT_PWB)
+  #define PWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory") ; localPwbCounter++
+  #define PFENCE()               __asm__ volatile("sfence" : : : "memory") ; localPfenceCounter++
+  #define PSYNC()                __asm__ volatile("sfence" : : : "memory") ; localPsyncCounter++
 #else
 #error "You must define what PWB is. Choose PWB_IS_CLFLUSHOPT if you don't know what your CPU is capable of"
 #endif
 
-// Please keep this file in sync (as much as possible) with stms/OneFileLF.hpp
-
-// // Macros needed for persistence
-// #ifdef PWB_IS_CLFLUSH
-//   /*
-//    * More info at http://elixir.free-electrons.com/linux/latest/source/arch/x86/include/asm/special_insns.h#L213
-//    * Intel programming manual at https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-optimization-manual.pdf
-//    * Use these for Broadwell CPUs (cervino server)
-//    */
-//   #define PWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory")                  // Broadwell only works with this.
-//   #define PFENCE()               {}                                                                         // No ordering fences needed for CLFLUSH (section 7.4.6 of Intel manual)
-//   #define PSYNC()                {}                                                                         // For durability it's not obvious, but CLFLUSH seems to be enough, and PMDK uses the same approach
-// #elif PWB_IS_CLWB
-//   /* Use this for CPUs that support clwb, such as the SkyLake SP series (c5 compute intensive instances in AWS are an example of it) */
-//   #define PWB(addr)              __asm__ volatile(".byte 0x66; xsaveopt %0" : "+m" (*(volatile char *)(addr)))  // clwb() only for Ice Lake onwards
-//   #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
-//   #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
-// #elif PWB_IS_NOP
-//   /* pwbs are not needed for shared memory persistency (i.e. persistency across process failure) */
-//   #define PWB(addr)              {}
-//   #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
-//   #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
-// #elif PWB_IS_CLFLUSHOPT
-//   /* Use this for CPUs that support clflushopt, which is most recent x86 */
-//   #define PWB(addr)              __asm__ volatile(".byte 0x66; clflush %0" : "+m" (*(volatile char *)(addr)))    // clflushopt (Kaby Lake)
-//   #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
-//   #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
-// #else
-// #error "You must define what PWB is. Choose PWB_IS_CLFLUSHOPT if you don't know what your CPU is capable of"
-// #endif
+#if defined(COUNT_PWB)
+thread_local int localPwbCounter = 0;
+thread_local int localPfenceCounter = 0;
+thread_local int localPsyncCounter = 0;
+#endif
 
 
 /*
@@ -111,15 +85,6 @@
  * - The persistent logs are allocated in PM, same as all user allocations from tmNew(), 'curTx', and 'request'
  */
 namespace poflf {
-
-std::mutex pLock; // Used to add local PWB and PFENCE instructions count to the global variables
-
-thread_local int localPwbCounter = 0;
-thread_local int localPfenceCounter = 0;
-thread_local int localPsyncCounter = 0;
-int pwbCounter = 0;
-int pfenceCounter = 0;
-thread_local int psyncCounter = 0;
 
 // Size of the persistent memory region
 #ifndef PM_REGION_SIZE
@@ -182,7 +147,7 @@ static inline uint64_t trans2idx(uint64_t trans) {
 static inline void flushFromTo(void* from, void* to) noexcept {
     const uint64_t cache_line_size = 64;
     uint8_t* ptr = (uint8_t*)(((uint64_t)from) & (~(cache_line_size-1)));
-    for (; ptr < (uint8_t*)to; ptr += cache_line_size) PWB(ptr);
+    for (; ptr < (uint8_t*)to; ptr += cache_line_size) {PWB(ptr);}
 }
 
 
@@ -488,7 +453,7 @@ struct WriteSet {
     // Uses the log to flush the modifications to NVM.
     // We assume tmtype does not cross cache line boundaries.
     inline void flushModifications() {
-        for (uint64_t i = 0; i < numStores; i++) PWB(log[i].addr);
+        for (uint64_t i = 0; i < numStores; i++) {PWB(log[i].addr);}
     }
 
     // Each address on a different bucket

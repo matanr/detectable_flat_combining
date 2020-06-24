@@ -12,7 +12,9 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+#if defined(COUNT_PWB)
 #include <mutex>
+#endif
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -21,6 +23,13 @@
 
 using namespace std;
 using namespace chrono;
+
+#if defined(COUNT_PWB)
+std::mutex pLock; // Used to add local PWB and PFENCE instructions count to the global variables
+int pwbCounter = 0;
+int pfenceCounter = 0;
+int psyncCounter = 0;
+#endif
 
 #if defined(USE_ROM_LOG_FC) && defined(COUNT_PWB)
 #include "romulus/RomLogFC.hpp"
@@ -118,12 +127,8 @@ public:
             // Measurement phase
             auto startBeats = steady_clock::now();
             for (long long iter = 0; iter < numPairs/numThreads; iter++) {
-                PTM::updateTx([&] () {
-                    stack->push(ud);
-                });
-                PTM::updateTx([&] () {
-                    if (stack->pop() == nullptr) cout << "Error at measurement pop() iter=" << iter << "\n";
-                });
+                stack->push(ud);
+                if (stack->pop() == nullptr) cout << "Error at measurement pop() iter=" << iter << "\n";
             }
             auto stopBeats = steady_clock::now();
             *delta = stopBeats - startBeats;
@@ -143,14 +148,10 @@ public:
 		for (long long iter = 0; iter < 2 * numPairs/numThreads; iter++) {
 			int randop = rand() % 2;         // randop in the range 0 to 1
 			if (randop == 0) {
-				PTM::updateTx([&] () {
-                    stack->push(ud);
-                });
+                stack->push(ud);
 			}
 			else if (randop == 1) {
-				PTM::updateTx([&] () {
-                    stack->pop();
-                });
+                stack->pop();
 			}
 		}
 		auto stopBeats = steady_clock::now();
