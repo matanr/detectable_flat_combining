@@ -35,6 +35,10 @@
 #define PDATA_FILE "../data/pwb-pfence-" PTM_FILEXT ".txt"
 #endif
 
+// __thread uint64_t tl_num_pwbs = 0;
+thread_local uint64_t tl_num_pwbs = 0;
+
+
 
 #define MILLION  1000000LL
 

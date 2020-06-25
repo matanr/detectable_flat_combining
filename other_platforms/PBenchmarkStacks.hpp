@@ -37,6 +37,9 @@ using namespace romlogfc;
 #elif defined(USE_OFLF) && defined(COUNT_PWB)
 #include "one_file/OneFilePTMLF.hpp"
 using namespace poflf;
+#elif defined(USE_PMDK) && defined(COUNT_PWB)
+// extern __thread uint64_t tl_num_pwbs;
+extern thread_local uint64_t tl_num_pwbs;
 #endif
 
 struct UserData  {
@@ -137,6 +140,9 @@ public:
             pwbCounter += localPwbCounter;
             pfenceCounter += localPfenceCounter;
             psyncCounter += localPsyncCounter;
+            #elif defined(COUNT_PWB) && defined(USE_PMDK)
+            std::lock_guard<std::mutex> lock(pLock);
+            pwbCounter += tl_num_pwbs;
             #endif
         };
 
@@ -208,6 +214,13 @@ public:
 		pwbCounter = 0; pfenceCounter = 0; psyncCounter = 0; 
 		localPwbCounter = 0; localPfenceCounter = 0; localPsyncCounter = 0;
         return make_tuple(numPairs*2*NSEC_IN_SEC/median, pwbPerOp, pfencePerOp);
+        #elif defined(COUNT_PWB) && defined(USE_PMDK)
+        double pwbPerOp = double(pwbCounter) / double(numPairs*2);
+		cout << "#pwb/#op: " << fixed << pwbPerOp;
+
+		pwbCounter = 0;
+		tl_num_pwbs = 0;
+        return make_tuple(numPairs*2*NSEC_IN_SEC/median, pwbPerOp, 0);
         #endif
         return make_tuple(numPairs*2*NSEC_IN_SEC/median, 0, 0);
     }
