@@ -38,8 +38,8 @@ using namespace romlogfc;
 #include "one_file/OneFilePTMLF.hpp"
 using namespace poflf;
 #elif defined(USE_PMDK) && defined(COUNT_PWB)
-// extern __thread uint64_t tl_num_pwbs;
-extern thread_local uint64_t tl_num_pwbs;
+extern __thread uint64_t tl_num_pwbs;
+// extern thread_local uint64_t tl_num_pwbs;
 #endif
 
 struct UserData  {
