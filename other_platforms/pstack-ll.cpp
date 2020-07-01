@@ -36,8 +36,8 @@
 #endif
 
 #if defined(USE_PMDK)
-extern __thread uint64_t tl_num_pwbs;
-// thread_local uint64_t tl_num_pwbs = 0;
+// extern __thread uint64_t tl_num_pwbs;
+thread_local uint64_t tl_num_pwbs = 0;
 #endif
 
 
