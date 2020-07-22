@@ -1,1 +1,1 @@
-# nvram
+# Detectable Flat Combining
