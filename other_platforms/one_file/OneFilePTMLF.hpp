@@ -92,7 +92,7 @@ namespace poflf {
 #endif
 // Name of persistent file mapping (back)
 #ifndef PM_FILE_NAME
-#define PM_FILE_NAME   "/dev/shm/trinityfc_shared"
+#define PM_FILE_NAME   "/mnt/dfcpmem/trinityfc_shared"
 #endif
 
 //
@@ -198,11 +198,18 @@ public:
         for (int tid = 0; tid < REGISTRY_MAX_THREADS; tid++) {
             if (usedTID[tid].load(std::memory_order_acquire)) continue;
             bool unused = false;
+            #if defined(COUNT_PWB)
+                localPfenceCounter++;
+            #endif
             if (!usedTID[tid].compare_exchange_strong(unused, true)) continue;
+            
             // Increase the current maximum to cover our thread id
             int curMax = maxTid.load();
             while (curMax <= tid) {
                 maxTid.compare_exchange_strong(curMax, tid+1);
+                #if defined(COUNT_PWB)
+                    localPfenceCounter++;
+                #endif
                 curMax = maxTid.load();
             }
             tl_tcico.tid = tid;
@@ -764,6 +771,9 @@ public:
         // Attempt to CAS curTx to our OpDesc instance (tid) incrementing the seq in it
         uint64_t lcurTx = myopd.curTx;
         if (debug) printf("tid=%i  attempting CAS on curTx from (%ld,%ld) to (%ld,%ld)\n", tid, trans2seq(lcurTx), trans2idx(lcurTx), seq+1, (uint64_t)tid);
+        #if defined(COUNT_PWB)
+            localPfenceCounter++;
+        #endif
         if (!curTx->compare_exchange_strong(lcurTx, newTx)) return false;
         PWB(curTx);
         // Execute each store in the write-set using DCAS() and close the request
@@ -908,6 +918,9 @@ private:
         const uint64_t newReq = seqidx2trans(seq+1,idx);
         if (opd.pWriteSet->request.load(std::memory_order_acquire) == lcurTx) {
             opd.pWriteSet->request.compare_exchange_strong(lcurTx, newReq);
+            #if defined(COUNT_PWB)
+                localPfenceCounter++;
+            #endif
         }
     }
 

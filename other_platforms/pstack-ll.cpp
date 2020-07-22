@@ -19,20 +19,36 @@
 #include "ptms/romuluslr/RomulusLR.hpp"
 #define DATA_FILE "data/pstack-ll-romlr.txt"
 #elif defined USE_ROM_LOG_FC
-#include "romulus/RomLogFC.hpp"
-#define DATA_FILE "../data/green-pstack-ll-romlogfc.txt"
-#define PDATA_FILE "../data/pwb-pfence-romlogfc.txt"
+    #include "romulus/RomLogFC.hpp"
+    #ifdef RANDOM_BENCH
+    #define DATA_FILE "../data/rand-green-pstack-ll-romlogfc.txt"
+    #define PDATA_FILE "../data/rand-pwb-pfence-romlogfc.txt"
+    #else
+    #define DATA_FILE "../data/green-pstack-ll-romlogfc.txt"
+    #define PDATA_FILE "../data/pwb-pfence-romlogfc.txt"
+    #endif
+
 #elif defined USE_OFWF
 #include "one_file/OneFilePTMWF.hpp"
 #define DATA_FILE "../data/green-pstack-ll-ofwf.txt"
 #endif
 
 #ifndef DATA_FILE
-#define DATA_FILE "../data/green-pstack-ll-" PTM_FILEXT ".txt"
+#ifdef RANDOM_BENCH
+    #define DATA_FILE "../data/rand-green-pstack-ll-" PTM_FILEXT ".txt"
+    #else
+    #define DATA_FILE "../data/green-pstack-ll-" PTM_FILEXT ".txt"
+    #endif
+
 #endif
 
 #ifndef PDATA_FILE
-#define PDATA_FILE "../data/pwb-pfence-" PTM_FILEXT ".txt"
+#ifdef RANDOM_BENCH
+    #define PDATA_FILE "../data/rand-pwb-pfence-" PTM_FILEXT ".txt"
+    #else
+    #define PDATA_FILE "../data/pwb-pfence-" PTM_FILEXT ".txt"
+    #endif
+
 #endif
 
 #if defined(USE_PMDK)
@@ -49,7 +65,7 @@ int main(void) {
     const std::string pdataFilename { PDATA_FILE };
     // vector<int> threadList = { 1, 2, 4, 8, 10, 16, 24, 32, 40 };     // For Castor
     std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 64, 68, 72, 76, 80 };     // For Castor
-    const int numRuns = 1;                                           // Number of runs
+    const int numRuns = 10;                                           // Number of runs
     const long numPairs = 1*MILLION;                                 // 1M is fast enough on the laptop
 
     tuple<uint64_t, double, double> results[threadList.size()];
@@ -96,7 +112,23 @@ int main(void) {
             results[it] = bench.pushPop<TMLinkedListStackByRef<uint64_t,PTM_CLASS,PTM_TYPE>, PTM_CLASS>(cName, numPairs, numRuns);
 #endif
     }
-
+    #if defined(COUNT_PWB) && (defined(USE_ROM_LOG_FC) || defined(USE_OFLF))
+    // Export tab-separated values to a file to be imported in gnuplot or excel
+    ofstream pdataFile;
+    pdataFile.open(pdataFilename);
+    pdataFile << "Threads\t";
+    // Printf class names for each column
+    pdataFile << cName<<"-PWB" << "\t" << cName<<"-PFENCE" << "\t";
+    pdataFile << "\n";
+    for (int it = 0; it < threadList.size(); it++) {
+        pdataFile << threadList[it] << "\t";
+        pdataFile << get<1>(results[it]) << "\t";
+        pdataFile << get<2>(results[it]) << "\t";
+        pdataFile << "\n";
+    }
+    pdataFile.close();
+    std::cout << "\nSuccessfuly saved results in " << pdataFilename << "\n";
+    #else
     // Export tab-separated values to a file to be imported in gnuplot or excel
     ofstream dataFile;
     dataFile.open(dataFilename);
@@ -111,23 +143,6 @@ int main(void) {
     }
     dataFile.close();
     std::cout << "\nSuccessfuly saved results in " << dataFilename << "\n";
-
-    #if defined(COUNT_PWB) && (defined(USE_ROM_LOG_FC) || defined(USE_OFLF))
-    // Export tab-separated values to a file to be imported in gnuplot or excel
-    ofstream pdataFile;
-    pdataFile.open(pdataFilename);
-    pdataFile << "Threads\t";
-    // Printf class names for each column
-    pdataFile << "PWB" << "\t" << "PFENCE" << "\t";
-    pdataFile << "\n";
-    for (int it = 0; it < threadList.size(); it++) {
-        pdataFile << threadList[it] << "\t";
-        pdataFile << get<1>(results[it]) << "\t";
-        pdataFile << get<2>(results[it]) << "\t";
-        pdataFile << "\n";
-    }
-    pdataFile.close();
-    std::cout << "\nSuccessfuly saved results in " << pdataFilename << "\n";
     #endif
 
     return 0;

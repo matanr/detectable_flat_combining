@@ -24,6 +24,10 @@ using namespace pmem::obj;
 using namespace std::chrono;
 using namespace std::literals::chrono_literals;
 
+#ifdef SAME100_BENCH
+#define DATA_FILE "../data/same100-green-pstack-ll-dfc.txt"
+#endif
+
 #ifndef DATA_FILE
 #define DATA_FILE "../data/green-pstack-ll-dfc.txt"
 #endif
@@ -34,17 +38,20 @@ using namespace std::literals::chrono_literals;
 #define PM_REGION_SIZE 1024*1024*1024ULL // 1GB for now
 // #define PM_REGION_SIZE 1024*1024*128ULL 
 #endif
+
 // Name of persistent file mapping
 #ifndef PM_FILE_NAME
 // #define PM_FILE_NAME   "/home/matanr/recov_flat_combining/poolfile"
-#define PM_FILE_NAME   "/dev/shm/dfc_shared"
+// #define PM_FILE_NAME   "/dev/shm/dfc_shared"
+// #define PM_FILE_NAME   "/dev/dax4.0"
+#define PM_FILE_NAME   "/mnt/dfcpmem/dfc_shared"
 #endif
 
 // #define N 8  // number of processes
 #define N 80  // number of processes
 
-// #define MAX_POOL_SIZE 4000  // number of nodes in the pool
-#define MAX_POOL_SIZE 80  // number of nodes in the pool
+#define MAX_POOL_SIZE 4000  // number of nodes in the pool
+// #define MAX_POOL_SIZE 80  // number of nodes in the pool
 #define ACK -1
 #define EMPTY -2
 #define NONE -3
@@ -99,8 +106,8 @@ uint64_t free_nodes_log_h1;
   #define PWB(addr)              __asm__ volatile(".byte 0x66; clflush %0" : "+m" (*(volatile char *)(addr)))    // clflushopt (Kaby Lake)
   #define PFENCE()               __asm__ volatile("sfence" : : : "memory")
   #define PSYNC()                __asm__ volatile("sfence" : : : "memory")
-  #define PPWB(addr)              __asm__ volatile(".byte 0x66; clflush %0" : "+m" (*(volatile char *)(addr))) // parallel PWB
-  #define PPFENCE()               __asm__ volatile("sfence" : : : "memory") // parallel PFENCE
+  #define PPWB(addr)             __asm__ volatile(".byte 0x66; clflush %0" : "+m" (*(volatile char *)(addr))) // parallel PWB
+  #define PPFENCE()              __asm__ volatile("sfence" : : : "memory") // parallel PFENCE
 #elif PWB_IS_PMEM
   #define PWB(addr)              pmem_flush(addr, sizeof(addr))
   #define PFENCE()               pmem_drain()
@@ -131,6 +138,9 @@ thread_local int localParallelPwbCounter = 0;
 thread_local int localParallelPfenceCounter = 0;
 int pwbParallelCounter = 0;
 int pfenceParallelCounter = 0;
+
+// thread_local int l_combining_counter = 0;
+// int combining_counter = 0;
 
 int pushList[N];
 int popList[N];
@@ -382,6 +392,7 @@ void update_free_nodes(persistent_ptr<detectable_fc> dfc, size_t opEpoch) {
 
 
 size_t combine(persistent_ptr<detectable_fc> dfc, size_t opEpoch, pmem::obj::pool<root> pop, size_t pid) {
+	// l_combining_counter ++;
 	int top_index = reduce(dfc);
 	persistent_ptr<node> head = dfc->top[(opEpoch/2)%2];
 	if (top_index != 0) {
@@ -482,7 +493,6 @@ size_t combine(persistent_ptr<detectable_fc> dfc, size_t opEpoch, pmem::obj::poo
 			// PWB(&dfc->announce_arr[i]->valid);
 			// PWB(&dfc->announce_arr[i]);
 		}
-		
 	}
 	// pwbCounter6 ++;
 	PWB(&dfc->top[(opEpoch/2 + 1) % 2]);
@@ -588,7 +598,11 @@ size_t recover(persistent_ptr<detectable_fc> dfc, pmem::obj::pool<root> pop, siz
 	else {
 		while (gRecoveryLock.load() == 1) {} // Spin until recovery is complete
 	}
-	if (VALID_ANN(dfc, pid)->epoch == NONE) {
+	// if (VALID_ANN(dfc, pid)->epoch == NONE) {
+	// 	// did not announce properly
+	// 	return op(dfc, pop, pid, opName, param);
+	// }
+	if (VALID_ANN(dfc, pid)->name == NONE) {
 		// did not announce properly
 		return op(dfc, pop, pid, opName, param);
 	}
@@ -627,7 +641,7 @@ inline bool is_file_exists (const char* name) {
  * enqueue-dequeue pairs: in each iteration a thread executes an enqueue followed by a dequeue;
  * the benchmark executes 10^8 pairs partitioned evenly among all threads;
  */
-std::tuple<uint64_t, double, double> pushPopTest(int numThreads, const long numPairs, const int numRuns) {
+std::tuple<uint64_t, double, double, double, double> pushPopTest(int numThreads, const long numPairs, const int numRuns, const int numSameOps) {
 	const uint64_t kNumElements = 0; // Number of initial items in the stack
 	static const long long NSEC_IN_SEC = 1000000000LL;
 	
@@ -636,10 +650,10 @@ std::tuple<uint64_t, double, double> pushPopTest(int numThreads, const long numP
 
 	const char* pool_file_name = PM_FILE_NAME;
 
-	pop = pool<root>::create(pool_file_name, "layout", PM_REGION_SIZE);
-	proot = pop.root();
-	transaction_allocations(proot, pop);
-	std::cout << "Finished allocating!" << std::endl;
+	// pop = pool<root>::create(pool_file_name, "layout", (size_t)PM_REGION_SIZE, S_IRUSR|S_IWUSR);
+	// proot = pop.root();
+	// transaction_allocations(proot, pop);
+	// std::cout << "Finished allocating!" << std::endl;
 
     size_t params [N];
     size_t ops [N];
@@ -668,12 +682,38 @@ std::tuple<uint64_t, double, double> pushPopTest(int numThreads, const long numP
 		pfenceCounter += localPfenceCounter;
 		pwbParallelCounter += localParallelPwbCounter;
 		pfenceParallelCounter += localParallelPfenceCounter;
+		// combining_counter += l_combining_counter;
+	};
+
+	auto pushpop_k_lambda = [&numThreads, &startFlag,&numPairs, &numSameOps, &proot, &pop](nanoseconds *delta, const int tid) {
+		//UserData* ud = new UserData{0,0};
+		size_t param = tid;
+		while (!startFlag.load()) {} // Spin until the startFlag is set
+		// Measurement phase
+		auto startBeats = steady_clock::now();
+		for (long long iter = 0; iter < numPairs/(numThreads*numSameOps); iter++) {
+			for (long iter_s = 0; iter_s < numSameOps; iter++) {
+				op(proot->dfc, pop, tid, PUSH_OP, param);
+			}
+			for (long iter_s = 0; iter_s < numSameOps; iter++) {
+				if (op(proot->dfc, pop, tid, POP_OP, NONE) == EMPTY) std::cout << "Error at measurement pop() iter=" << iter << "\n";
+			}
+		}
+		auto stopBeats = steady_clock::now();
+		*delta = stopBeats - startBeats;
+		std::lock_guard<std::mutex> lock(pLock);
+		pwbCounter += localPwbCounter;
+		pfenceCounter += localPfenceCounter;
+		pwbParallelCounter += localParallelPwbCounter;
+		pfenceParallelCounter += localParallelPfenceCounter;
+		// combining_counter += l_combining_counter;
 	};
 
 	auto randop_lambda = [&numThreads, &startFlag,&numPairs, &proot, &pop](nanoseconds *delta, const int tid) {
 		size_t param = tid;
 		while (!startFlag.load()) {} // Spin until the startFlag is set
 		// Measurement phase
+		// thread_local int operations[2 * numPairs/numThreads];
 		auto startBeats = steady_clock::now();
 		for (long long iter = 0; iter < 2 * numPairs/numThreads; iter++) {
 			int randop = rand() % 2;         // randop in the range 0 to 1
@@ -686,11 +726,21 @@ std::tuple<uint64_t, double, double> pushPopTest(int numThreads, const long numP
 		}
 		auto stopBeats = steady_clock::now();
 		*delta = stopBeats - startBeats;
+		std::lock_guard<std::mutex> lock(pLock);
+		pwbCounter += localPwbCounter;
+		pfenceCounter += localPfenceCounter;
+		pwbParallelCounter += localParallelPwbCounter;
+		pfenceParallelCounter += localParallelPfenceCounter;
+		// combining_counter += l_combining_counter;
 	};
 
 	for (int irun = 0; irun < numRuns; irun++) {
 		NN = numThreads;
-		// currently, for each run there is one poolfile. therefore, only one run is supported
+		
+		pop = pool<root>::create(pool_file_name, "layout", (size_t)PM_REGION_SIZE, S_IRUSR|S_IWUSR);
+		proot = pop.root();
+		transaction_allocations(proot, pop);
+		std::cout << "Finished allocating!" << std::endl;
 
 		// Fill the queue with an initial amount of nodes
 		size_t param = size_t(41);
@@ -698,14 +748,17 @@ std::tuple<uint64_t, double, double> pushPopTest(int numThreads, const long numP
 			op(proot->dfc, pop, 0, PUSH_OP, param);
 		}
 		std::thread enqdeqThreads[numThreads];
+		#ifdef SAME100_BENCH
 		// for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = std::thread(randop_lambda, &deltas[tid][irun], tid);
+		for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = std::thread(pushpop_k_lambda, &deltas[tid][irun], tid);
+		#else
 		for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = std::thread(pushpop_lambda, &deltas[tid][irun], tid);
+		#endif
 		startFlag.store(true);
 		// Sleep for 2 seconds just to let the threads see the startFlag
 		std::this_thread::sleep_for(2s);
 		for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid].join();
 		startFlag.store(false);
-		
 
 		transaction_deallocations(proot, pop);
 		/* Cleanup */
@@ -728,6 +781,9 @@ std::tuple<uint64_t, double, double> pushPopTest(int numThreads, const long numP
 	auto median = agg[numRuns/2].count()/numThreads; // Normalize back to per-thread time (mean of time for this run)
 
 	std::cout << "Total Ops/sec = " << numPairs*2*NSEC_IN_SEC/median << "\n";
+	// std::cout << "combining_counter: " << combining_counter << std::endl;
+	// combining_counter = 0;
+	// l_combining_counter = 0;
 	#if defined(COUNT_PWB)
 		double pwbPerOp = double(pwbCounter) / double(numPairs*2);
 		double pfencePerOp = double(pfenceCounter) / double(numPairs*2);
@@ -742,9 +798,9 @@ std::tuple<uint64_t, double, double> pushPopTest(int numThreads, const long numP
 		
 		pwbCounter = 0; pfenceCounter = 0; pwbParallelCounter = 0; pfenceParallelCounter = 0;
 		localPwbCounter = 0; localPfenceCounter = 0; localParallelPwbCounter = 0; localParallelPfenceCounter = 0;
-        return std::make_tuple(numPairs*2*NSEC_IN_SEC/median, pwbPerOp, pfencePerOp);
+        return std::make_tuple(numPairs*2*NSEC_IN_SEC/median, pwbPerOp, pfencePerOp, pwbPerOp + pwbParallelPerOp, pfencePerOp + pfenceParallelPerOp);
 	#endif
-	return std::make_tuple(numPairs*2*NSEC_IN_SEC/median, 0, 0);
+	return std::make_tuple(numPairs*2*NSEC_IN_SEC/median, 0, 0, 0, 0);
 }
 
 
@@ -753,13 +809,14 @@ std::tuple<uint64_t, double, double> pushPopTest(int numThreads, const long numP
 int runSeveralTests() {
     const std::string dataFilename { DATA_FILE };
 	const std::string pdataFilename { PDATA_FILE };
-	// vector<int> threadList = { 1, 2, 4, 8, 10, 16, 24, 32, 40 };     // For Castor
+	std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 24, 32, 40 };     // For Castor
     // std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40};     // For Castor
-	std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 64, 68, 72, 76, 80 };     // For Castor
-    const int numRuns = 1;                                           // Number of runs
+	// std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 64, 68, 72, 76, 80 };     // For Castor
+    const int numRuns = 10;                                           // Number of runs
     const long numPairs = 1*MILLION;                                 // 1M is fast enough on the laptop
+	const int numSameOps = 100;
 
-    std::tuple<uint64_t, double, double> results[threadList.size()];
+    std::tuple<uint64_t, double, double, double, double> results[threadList.size()];
     std::string cName = "DFC";
     // Reset results
     std::memset(results, 0, sizeof(uint64_t)*threadList.size());
@@ -768,9 +825,10 @@ int runSeveralTests() {
     for (int it = 0; it < threadList.size(); it++) {
         int nThreads = threadList[it];
         std::cout << "\n----- pstack-ll (push-pop)   threads=" << nThreads << "   pairs=" << numPairs/MILLION << "M   runs=" << numRuns << " -----\n";
-		results[it] = pushPopTest(nThreads, numPairs, numRuns);
+		results[it] = pushPopTest(nThreads, numPairs, numRuns, numSameOps);
     }
 
+	#if not defined(COUNT_PWB)
     // Export tab-separated values to a file to be imported in gnuplot or excel
     std::ofstream dataFile;
     dataFile.open(dataFilename);
@@ -785,6 +843,7 @@ int runSeveralTests() {
     }
     dataFile.close();
     std::cout << "\nSuccessfuly saved results in " << dataFilename << "\n";
+	#endif
 
 	#if defined(COUNT_PWB)
     // Export tab-separated values to a file to be imported in gnuplot or excel
@@ -792,12 +851,14 @@ int runSeveralTests() {
     pdataFile.open(pdataFilename);
     pdataFile << "Threads\t";
     // Printf class names for each column
-    pdataFile << "PWB" << "\t" << "PFENCE" << "\t";
+    pdataFile << "DFC-PWB" << "\t" << "DFC-PFENCE" << "\t" << "DFC-PWB-T" << "\t" << "DFC-PFENCE-T" << "\t";
     pdataFile << "\n";
     for (int it = 0; it < threadList.size(); it++) {
         pdataFile << threadList[it] << "\t";
         pdataFile << std::get<1>(results[it]) << "\t";
         pdataFile << std::get<2>(results[it]) << "\t";
+		pdataFile << std::get<3>(results[it]) << "\t";
+        pdataFile << std::get<4>(results[it]) << "\t";
         pdataFile << "\n";
     }
     pdataFile.close();
@@ -853,7 +914,7 @@ int recoveryTest() {
 		
 		for (int pid=0; pid<NN; pid++) {
 			char nextOp = 1 - proot->dfc->announce_arr[pid]->valid % 10;	
-			ANN(proot->dfc, pid, nextOp)->epoch = NONE; 
+			ANN(proot->dfc, pid, nextOp)->epoch = NONE; // change the last field: 
             threads_pool[pid] = std::thread (op, proot->dfc, pop, pid, ops[pid], params[pid]);
         }							      
 		for (int pid=0; pid<NN; pid++) {
@@ -878,7 +939,8 @@ int recoveryTest() {
 		
 		for (int pid=0; pid<NN; pid++) {
 			char nextOp = 1 - proot->dfc->announce_arr[pid]->valid % 10;	
-			ANN(proot->dfc, pid, nextOp)->epoch = NONE; 
+			// ANN(proot->dfc, pid, nextOp)->epoch = NONE; 
+			ANN(proot->dfc, pid, nextOp)->name = NONE; 
             threads_pool[pid] = std::thread (op, proot->dfc, pop, pid, ops[pid], params[pid]);
         }
 		// usleep(1);

@@ -16,10 +16,12 @@
 // Size of the persistent memory region
 #ifndef PM_REGION_SIZE
 #define PM_REGION_SIZE (1*1024*1024*1024ULL) // 1GB by default (to run on laptop)
+// #define PM_REGION_SIZE (1*512*1024*1024ULL) // 1GB by default (to run on laptop)
 #endif
 // Name of persistent file mapping
 #ifndef PM_FILE_NAME
-#define PM_FILE_NAME   "/dev/shm/pmdk_shared_friedman"
+#define PM_FILE_NAME   "/mnt/dfcpmem/pmdk_shared_friedman"
+// #define PM_FILE_NAME   "/dev/shm/pmdk_shared_friedman"
 #endif
 
 namespace pmdk {

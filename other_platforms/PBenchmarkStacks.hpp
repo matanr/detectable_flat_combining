@@ -162,6 +162,15 @@ public:
 		}
 		auto stopBeats = steady_clock::now();
 		*delta = stopBeats - startBeats;
+        #if defined(COUNT_PWB) && (defined(USE_ROM_LOG_FC) || defined(USE_OFLF))
+            std::lock_guard<std::mutex> lock(pLock);
+            pwbCounter += localPwbCounter;
+            pfenceCounter += localPfenceCounter;
+            psyncCounter += localPsyncCounter;
+            #elif defined(COUNT_PWB) && defined(USE_PMDK)
+            std::lock_guard<std::mutex> lock(pLock);
+            pwbCounter += tl_num_pwbs;
+            #endif
 	};
 
         for (int irun = 0; irun < numRuns; irun++) {
@@ -176,8 +185,11 @@ public:
                 });
             }
             thread enqdeqThreads[numThreads];
-            // for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = thread(randop_lambda, &deltas[tid][irun], tid);
+            #ifdef RANDOM_BENCH
+            for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = thread(randop_lambda, &deltas[tid][irun], tid);
+            #else
             for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = thread(pushpop_lambda, &deltas[tid][irun], tid);
+            #endif
             startFlag.store(true);
             // Sleep for 2 seconds just to let the threads see the startFlag
             this_thread::sleep_for(2s);

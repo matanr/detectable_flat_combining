@@ -1,9 +1,10 @@
 CXX = g++  #-8
 # CXX = icpc  #-8
-# CXXFLAGS = -std=c++14 -g -O2 -DPWB_IS_CLFLUSHOPT
-# CXXFLAGS = -std=c++14 -g -O2 -DPWB_IS_CLFLUSH
+CXXFLAGS = -std=c++14 -O2 -DPWB_IS_CLFLUSHOPT
+# CXXFLAGS = -std=c++14 -O2 -DPWB_IS_CLFLUSHOPT -DRANDOM_BENCH
 # CXXFLAGS = -std=c++14 -O2 -DPWB_IS_CLFLUSH
-CXXFLAGS = -std=c++14 -O2 -DCOUNT_PWB
+# CXXFLAGS = -std=c++14 -g -O2 -DPWB_IS_CLFLUSH
+# CXXFLAGS = -std=c++14 -O2 -DCOUNT_PWB
 # CXXFLAGS = -std=c++14 -g -O2 -DPWB_IS_NOP
 # Use these options for castor-1 (Optane DC PM):
 #CXXFLAGS = -std=c++14 -g -O2 -DPWB_IS_CLWB -DPM_REGION_SIZE=4*1024*1024*1024ULL -DPM_FILE_NAME="\"/mnt/pmem0/durable\""    
@@ -44,12 +45,12 @@ clean: persistencyclean
 
 persistencyclean:
 	rm -f /mnt/pmem0/durable
-	rm -f /dev/shm/*_shared
-	rm -f /dev/shm/*_shared_main
-	rm -f /dev/shm/*_shared_back
-	rm -f /dev/shm/psegments/*
-	rm -f /dev/shm/pmdk_shared
-	rm -f /dev/shm/pmdk_shared_friedman	
+	rm -f /mnt/dfcpmem/*_shared
+	rm -f /mnt/dfcpmem/*_shared_main
+	rm -f /mnt/dfcpmem/*_shared_back
+	rm -f /mnt/dfcpmem/psegments/*
+	rm -f /mnt/dfcpmem/pmdk_shared
+	rm -f /mnt/dfcpmem/pmdk_shared_friedman	
 
 
 

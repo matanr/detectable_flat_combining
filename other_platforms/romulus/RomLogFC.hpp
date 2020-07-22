@@ -63,11 +63,12 @@
 #elif defined(PWB_IS_PMEM)
   #define PWB(addr)              pmem_flush(addr, sizeof(addr))
   #define PFENCE()               pmem_drain()
-  #define PSYNC() 				 {}
+  #define PSYNC() 				 pmem_drain()
 #elif defined(COUNT_PWB)
   #define PWB(addr)              __asm__ volatile("clflush (%0)" :: "r" (addr) : "memory") ; localPwbCounter++
   #define PFENCE()               __asm__ volatile("sfence" : : : "memory") ; localPfenceCounter++
-  #define PSYNC()                __asm__ volatile("sfence" : : : "memory") ; localPsyncCounter++
+  #define PSYNC()                __asm__ volatile("sfence" : : : "memory") ; localPfenceCounter++
+//   #define PSYNC()                __asm__ volatile("sfence" : : : "memory") ; localPsyncCounter++
 #else
 #error "You must define what PWB is. Choose PWB_IS_CLFLUSHOPT if you don't know what your CPU is capable of"
 #endif
@@ -99,7 +100,7 @@ namespace romlogfc {
 // Name of persistent file mapping
 #ifndef PM_FILE_NAME
 // #define PM_FILE_NAME   "/home/matanr/recov_flat_combining/other_platforms/shm/romlogfc_shared"
-#define PM_FILE_NAME   "/dev/shm/romlogfc_shared"
+#define PM_FILE_NAME   "/mnt/dfcpmem/romlogfc_shared"
 #endif
 
 // Maximum number of registered threads that can execute transactions
@@ -453,6 +454,9 @@ private:
         inline bool tryLock() {
             if (writers.load() != 0) return false;
             int tmp = 0;
+            #if defined(COUNT_PWB)
+                localPfenceCounter++;
+            #endif
             return writers.compare_exchange_strong(tmp,2);
         }
         inline void unlock() {
