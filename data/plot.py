@@ -6,6 +6,8 @@ import numpy as np
 
 FLAGS = flags.FLAGS
 flags.DEFINE_string('prefix', "green-pstack-ll", 'Name prefix of the measurements')
+flags.DEFINE_boolean('comb', False, 'Whether combining measurements should be made')
+flags.DEFINE_string('comblist', "randop-pwb-pfence-dfc.txt,pwb-pfence-dfc.txt", 'List of files that should contain the combining measurements.')
 
 name_to_index = {"DFC": 0, "RomLog-FC": 1, "OneFilePTM-LF": 2, "PMDK": 3}
 
@@ -52,8 +54,7 @@ def plot_pwb_files(files):
     data = [None] * 3
     for file in files:
         try:
-            x, y1, y2, y3, y4 = np.loadtxt(file, comments='Threads', unpack=True)
-            to40 = x <= 40
+            x, y1, y2, y3, y4, y5 = np.loadtxt(file, comments='Threads', unpack=True)
             indices = np.where(np.in1d(x, [1,4,8,16,24,32,40]))[0]
             x = x[indices]
             y1 = y1[indices]
@@ -128,11 +129,57 @@ def plot_pwb_files(files):
     plt.show()
 
 
+def plot_combining_files(files):
+    data = [None] * 2
+    for file in files:
+        x, y1, y2, y3, y4, y5 = np.loadtxt(file, comments='Threads', unpack=True)
+        indices = np.where(np.in1d(x, [1,4,8,16,24,32,40]))[0]
+        x = x[indices]
+        y5 = y5[indices]
+        with open(file) as f:
+            first_line = f.readline().strip()
+            name = first_line.split()[1]
+            description = name.rfind("-Linked")
+            if description != -1:
+                name = name[:description]
+
+            description = name.rfind("-P")
+            if description != -1:
+                name = name[:description]
+
+        if "randop" in file:
+            label_name = name + "-RAND-OP"
+            data[name_to_index[name]+1] = [x, y5, label_name]
+        else:
+            label_name = name + "-PUSH-POP"
+            data[name_to_index[name]] = [x, y5, label_name]
+
+    for d in data:
+        plt.plot(d[0], d[1], 'o-', label=d[2])
+
+    plt.xlabel('Threads', size=10)
+    plt.ylabel('Combinings/Ops', size=10)
+    plt.yscale('log')
+    # plt.xticks([1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40], (1, 2, 4, 8, 10, 16, 18, 20,
+    #                                                                               22, 24, 26, 28, 30, 32, 34,
+    #                                                                               36, 40))
+    plt.xticks([1, 4, 8, 16, 24, 32, 40], (1, 4, 8, 16, 24, 32, 40))
+    # plt.yticks([0, 1.5, 3.5, 8.5, 20, 30, 40, 50], (0, 1.5, 3.5, 8.5, 20, 30, 40, 50))
+    # plt.title('Comparison of PWB per Operation')
+    plt.legend()
+    plt.savefig("COMB_Graph_of_" + FLAGS.prefix, dpi=None)
+    plt.show()
+
+
 def main(_):
-    files = glob(FLAGS.prefix + "*")
-    if FLAGS.prefix.startswith("pwb-pfence"):
+    if FLAGS.comb:
+        files = FLAGS.comblist.split(',')
+        plot_combining_files(files)
+    elif "pwb-pfence" in FLAGS.prefix:
+        files = glob(FLAGS.prefix + "*")
         plot_pwb_files(files)
     else:
+        files = glob(FLAGS.prefix + "*")
         plot_files(files)
 
 

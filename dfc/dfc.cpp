@@ -26,6 +26,10 @@ using namespace std::literals::chrono_literals;
 
 #ifdef SAME100_BENCH
 #define DATA_FILE "../data/same100-green-pstack-ll-dfc.txt"
+#define PDATA_FILE "../data/same100-pwb-pfence-dfc.txt"
+#elif defined RANDOP
+#define DATA_FILE "../data/randop-green-pstack-ll-dfc.txt"
+#define PDATA_FILE "../data/randop-pwb-pfence-dfc.txt"
 #endif
 
 #ifndef DATA_FILE
@@ -139,8 +143,8 @@ thread_local int localParallelPfenceCounter = 0;
 int pwbParallelCounter = 0;
 int pfenceParallelCounter = 0;
 
-// thread_local int l_combining_counter = 0;
-// int combining_counter = 0;
+thread_local int l_combining_counter = 0;
+int combining_counter = 0;
 
 int pushList[N];
 int popList[N];
@@ -392,7 +396,7 @@ void update_free_nodes(persistent_ptr<detectable_fc> dfc, size_t opEpoch) {
 
 
 size_t combine(persistent_ptr<detectable_fc> dfc, size_t opEpoch, pmem::obj::pool<root> pop, size_t pid) {
-	// l_combining_counter ++;
+	l_combining_counter ++;
 	int top_index = reduce(dfc);
 	persistent_ptr<node> head = dfc->top[(opEpoch/2)%2];
 	if (top_index != 0) {
@@ -486,31 +490,20 @@ size_t combine(persistent_ptr<detectable_fc> dfc, size_t opEpoch, pmem::obj::poo
 	for (int i=0; i<NN; i++) { //maybe persist on line. check on optane
 		short validOp = collectedValid[i];
 		if (validOp != NONE) {
-			// pwbCounter5 ++;
-			// PWB(&(ANN(dfc, i, validOp)->val));
-			// PWB(&(ANN(dfc, i, validOp)->epoch));
 			PWB(&ANN(dfc, i, validOp));
-			// PWB(&dfc->announce_arr[i]->valid);
-			// PWB(&dfc->announce_arr[i]);
 		}
 	}
-	// pwbCounter6 ++;
 	PWB(&dfc->top[(opEpoch/2 + 1) % 2]);
-	// pfenceCounter3 ++;
 	PFENCE();
 	dfc->cEpoch = dfc->cEpoch + 1;
-	// pwbCounter7 ++;
 	// this is important for the following case: the combiner updates the cEpoch, then several ops started to finish and return, 
 	// BEFORE cEpoch is persisted. then, when the system recovers we can't distinguish between the following cases: 
 	// 1. the combiner finished an operation and updated cEpoch (because it is not persisted), and several ops returned
 	// 2. the combiner was in a middle of the combining session (for example).
 	PWB(&dfc->cEpoch);
-	// pfenceCounter4 ++;
 	PFENCE();
 	dfc->cEpoch = dfc->cEpoch + 1;
-	// pwbCounter8 ++;
 	// PWB(&dfc->cEpoch); 
-	// pfenceCounter5 ++;
 	// PFENCE();
 	cLock.store(false, std::memory_order_release);
 	size_t value =  try_to_return(dfc, opEpoch, pid);
@@ -538,21 +531,6 @@ size_t op(persistent_ptr<detectable_fc> dfc, pmem::obj::pool<root> pop, size_t p
 	PPWB(&dfc->announce_arr[pid]->valid);
 	PPFENCE();
 	dfc->announce_arr[pid]->valid = 10 + nextOp; // now the combiner can collect
-	
-	// pwbCounter9[pid] ++;
-	// std::atomic_fetch_add(&pwbCounter9, 1);
-	// PWB(&dfc->announce_arr[pid]);
-	
-	// PWB(&dfc->announce_arr[pid]->valid);
-	// PFENCE();
-
-	// pfenceCounter6[pid] ++;
-	// std::atomic_fetch_add(&pfenceCounter6, 1);
-	
-	// if after crash we see valid=true, we can be sure that all announcements were completed
-
-	// dfc->announce_arr[pid]->valid = '1';
-
 	size_t value = try_to_take_lock(dfc, opEpoch, pid);
 	if (value != NONE){
 		return value;
@@ -570,15 +548,10 @@ size_t recover(persistent_ptr<detectable_fc> dfc, pmem::obj::pool<root> pop, siz
 	bool globalRecovery = gRecoveryLock.compare_exchange_strong(expected, 1);
 	if (globalRecovery) {
 		// garbage collect and update what nodes are free
-		// if (! garbage_collected) {
 		update_free_nodes(dfc, dfc->cEpoch);
-		// 	garbage_collected = true;
-		// } 
 		if (dfc->cEpoch%2 == 1) {
 			dfc->cEpoch = dfc->cEpoch + 1;
-			// pwbCounter1 ++;
 			PWB(&dfc->cEpoch);
-			// pfenceCounter1 ++;
 			PFENCE(); 
 		}
 		for (int i=0; i<NN; i++) { 
@@ -607,28 +580,6 @@ size_t recover(persistent_ptr<detectable_fc> dfc, pmem::obj::pool<root> pop, siz
 		return op(dfc, pop, pid, opName, param);
 	}
 	return VALID_ANN(dfc, pid)->val;
-	
-	// if ((int) dfc->announce_arr[pid]->valid / 10 < 0) { 
-	// 	// did not announce properly
-	// 	return op(dfc, pop, pid, opName, param);
-	// }
-
-	// size_t opEpoch = VALID_ANN(dfc, pid)->epoch;
-    // size_t opVal = VALID_ANN(dfc, pid)->val;
-	// if (opVal != NONE and dfc->cEpoch >= opEpoch + 1) {
-	// 	return opVal;
-	// }
-	// // char validOp = dfc->announce_arr[pid]->valid;
-	// // if ((int) validOp / 10 == 0) { // if not valid - make it valid, i.e. allow the combiner to collect
-	// // 	dfc->announce_arr[pid]->valid = 10 + (int) validOp;
-	// // }
-    // size_t value = try_to_take_lock(dfc, opEpoch, pid);
-	// if (value != NONE){
-	// 	return value;
-	// }
-	// opEpoch = dfc->cEpoch;  // this is important for cases in which a late-arriving process eventually gets to be a combiner
-	
-	// return combine(dfc, opEpoch, pop, pid);
 }
 
 
@@ -641,7 +592,7 @@ inline bool is_file_exists (const char* name) {
  * enqueue-dequeue pairs: in each iteration a thread executes an enqueue followed by a dequeue;
  * the benchmark executes 10^8 pairs partitioned evenly among all threads;
  */
-std::tuple<uint64_t, double, double, double, double> pushPopTest(int numThreads, const long numPairs, const int numRuns, const int numSameOps) {
+std::tuple<uint64_t, double, double, double, double, double> pushPopTest(int numThreads, const long numPairs, const int numRuns, const int numSameOps) {
 	const uint64_t kNumElements = 0; // Number of initial items in the stack
 	static const long long NSEC_IN_SEC = 1000000000LL;
 	
@@ -649,11 +600,6 @@ std::tuple<uint64_t, double, double, double, double> pushPopTest(int numThreads,
 	pmem::obj::persistent_ptr<root> proot;
 
 	const char* pool_file_name = PM_FILE_NAME;
-
-	// pop = pool<root>::create(pool_file_name, "layout", (size_t)PM_REGION_SIZE, S_IRUSR|S_IWUSR);
-	// proot = pop.root();
-	// transaction_allocations(proot, pop);
-	// std::cout << "Finished allocating!" << std::endl;
 
     size_t params [N];
     size_t ops [N];
@@ -666,7 +612,6 @@ std::tuple<uint64_t, double, double, double, double> pushPopTest(int numThreads,
 	std::cout << "##### " << "Detectable Flat Combining" << " #####  \n";
 
 	auto pushpop_lambda = [&numThreads, &startFlag,&numPairs, &proot, &pop](nanoseconds *delta, const int tid) {
-		//UserData* ud = new UserData{0,0};
 		size_t param = tid;
 		while (!startFlag.load()) {} // Spin until the startFlag is set
 		// Measurement phase
@@ -682,7 +627,7 @@ std::tuple<uint64_t, double, double, double, double> pushPopTest(int numThreads,
 		pfenceCounter += localPfenceCounter;
 		pwbParallelCounter += localParallelPwbCounter;
 		pfenceParallelCounter += localParallelPfenceCounter;
-		// combining_counter += l_combining_counter;
+		combining_counter += l_combining_counter;
 	};
 
 	auto pushpop_k_lambda = [&numThreads, &startFlag,&numPairs, &numSameOps, &proot, &pop](nanoseconds *delta, const int tid) {
@@ -692,10 +637,10 @@ std::tuple<uint64_t, double, double, double, double> pushPopTest(int numThreads,
 		// Measurement phase
 		auto startBeats = steady_clock::now();
 		for (long long iter = 0; iter < numPairs/(numThreads*numSameOps); iter++) {
-			for (long iter_s = 0; iter_s < numSameOps; iter++) {
+			for (long iter_s = 0; iter_s < numSameOps; iter_s++) {
 				op(proot->dfc, pop, tid, PUSH_OP, param);
 			}
-			for (long iter_s = 0; iter_s < numSameOps; iter++) {
+			for (long iter_s = 0; iter_s < numSameOps; iter_s++) {
 				if (op(proot->dfc, pop, tid, POP_OP, NONE) == EMPTY) std::cout << "Error at measurement pop() iter=" << iter << "\n";
 			}
 		}
@@ -706,7 +651,7 @@ std::tuple<uint64_t, double, double, double, double> pushPopTest(int numThreads,
 		pfenceCounter += localPfenceCounter;
 		pwbParallelCounter += localParallelPwbCounter;
 		pfenceParallelCounter += localParallelPfenceCounter;
-		// combining_counter += l_combining_counter;
+		combining_counter += l_combining_counter;
 	};
 
 	auto randop_lambda = [&numThreads, &startFlag,&numPairs, &proot, &pop](nanoseconds *delta, const int tid) {
@@ -731,7 +676,7 @@ std::tuple<uint64_t, double, double, double, double> pushPopTest(int numThreads,
 		pfenceCounter += localPfenceCounter;
 		pwbParallelCounter += localParallelPwbCounter;
 		pfenceParallelCounter += localParallelPfenceCounter;
-		// combining_counter += l_combining_counter;
+		combining_counter += l_combining_counter;
 	};
 
 	for (int irun = 0; irun < numRuns; irun++) {
@@ -751,6 +696,8 @@ std::tuple<uint64_t, double, double, double, double> pushPopTest(int numThreads,
 		#ifdef SAME100_BENCH
 		// for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = std::thread(randop_lambda, &deltas[tid][irun], tid);
 		for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = std::thread(pushpop_k_lambda, &deltas[tid][irun], tid);
+		#elif defined RANDOP
+		for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = std::thread(randop_lambda, &deltas[tid][irun], tid);
 		#else
 		for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = std::thread(pushpop_lambda, &deltas[tid][irun], tid);
 		#endif
@@ -782,25 +729,27 @@ std::tuple<uint64_t, double, double, double, double> pushPopTest(int numThreads,
 
 	std::cout << "Total Ops/sec = " << numPairs*2*NSEC_IN_SEC/median << "\n";
 	// std::cout << "combining_counter: " << combining_counter << std::endl;
-	// combining_counter = 0;
-	// l_combining_counter = 0;
 	#if defined(COUNT_PWB)
 		double pwbPerOp = double(pwbCounter) / double(numPairs*2);
 		double pfencePerOp = double(pfenceCounter) / double(numPairs*2);
 		double pwbParallelPerOp = double(pwbParallelCounter) / double(numPairs*2);
 		double pfenceParallelPerOp = double(pfenceParallelCounter) / double(numPairs*2);
+		double combiningPerOp = double(combining_counter) / double(numPairs*2);
 		std::cout << "#pwb/#op: " << std::fixed << pwbPerOp;
 		std::cout << ", #pfence/#op: " << std::fixed << pfencePerOp;
 		std::cout << ", T #pwb/#op: " << std::fixed << pwbPerOp + pwbParallelPerOp;
-		std::cout << ", T #pfence/#op: " << std::fixed << pfencePerOp + pfenceParallelPerOp << std::endl;
+		std::cout << ", T #pfence/#op: " << std::fixed << pfencePerOp + pfenceParallelPerOp; 
+		std::cout << ", #combining/#op: " << std::fixed << combiningPerOp << std::endl;
 		// std::cout << ", Total #pwb/#op (parallel PWBs included): " << std::fixed << pwbPerOp + pwbParallelPerOp;
 		// std::cout << "#Total pfence/#op (parallel PFENCEs included): " << std::fixed << pfencePerOp + pfenceParallelPerOp << std::endl;
 		
+		combining_counter = 0;
+		l_combining_counter = 0;
 		pwbCounter = 0; pfenceCounter = 0; pwbParallelCounter = 0; pfenceParallelCounter = 0;
 		localPwbCounter = 0; localPfenceCounter = 0; localParallelPwbCounter = 0; localParallelPfenceCounter = 0;
-        return std::make_tuple(numPairs*2*NSEC_IN_SEC/median, pwbPerOp, pfencePerOp, pwbPerOp + pwbParallelPerOp, pfencePerOp + pfenceParallelPerOp);
+        return std::make_tuple(numPairs*2*NSEC_IN_SEC/median, pwbPerOp, pfencePerOp, pwbPerOp + pwbParallelPerOp, pfencePerOp + pfenceParallelPerOp, combiningPerOp);
 	#endif
-	return std::make_tuple(numPairs*2*NSEC_IN_SEC/median, 0, 0, 0, 0);
+	return std::make_tuple(numPairs*2*NSEC_IN_SEC/median, 0, 0, 0, 0, 0);
 }
 
 
@@ -813,10 +762,11 @@ int runSeveralTests() {
     // std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40};     // For Castor
 	// std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 64, 68, 72, 76, 80 };     // For Castor
     const int numRuns = 10;                                           // Number of runs
+	// const int numRuns = 1;                                           // Number of runs
     const long numPairs = 1*MILLION;                                 // 1M is fast enough on the laptop
 	const int numSameOps = 100;
 
-    std::tuple<uint64_t, double, double, double, double> results[threadList.size()];
+    std::tuple<uint64_t, double, double, double, double, double> results[threadList.size()];
     std::string cName = "DFC";
     // Reset results
     std::memset(results, 0, sizeof(uint64_t)*threadList.size());
@@ -851,7 +801,7 @@ int runSeveralTests() {
     pdataFile.open(pdataFilename);
     pdataFile << "Threads\t";
     // Printf class names for each column
-    pdataFile << "DFC-PWB" << "\t" << "DFC-PFENCE" << "\t" << "DFC-PWB-T" << "\t" << "DFC-PFENCE-T" << "\t";
+    pdataFile << "DFC-PWB" << "\t" << "DFC-PFENCE" << "\t" << "DFC-PWB-T" << "\t" << "DFC-PFENCE-T" << "\t" << "DFC-COMBINING" << "\t";
     pdataFile << "\n";
     for (int it = 0; it < threadList.size(); it++) {
         pdataFile << threadList[it] << "\t";
@@ -859,6 +809,7 @@ int runSeveralTests() {
         pdataFile << std::get<2>(results[it]) << "\t";
 		pdataFile << std::get<3>(results[it]) << "\t";
         pdataFile << std::get<4>(results[it]) << "\t";
+		pdataFile << std::get<5>(results[it]) << "\t";
         pdataFile << "\n";
     }
     pdataFile.close();

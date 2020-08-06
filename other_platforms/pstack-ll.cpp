@@ -20,12 +20,15 @@
 #define DATA_FILE "data/pstack-ll-romlr.txt"
 #elif defined USE_ROM_LOG_FC
     #include "romulus/RomLogFC.hpp"
-    #ifdef RANDOM_BENCH
-    #define DATA_FILE "../data/rand-green-pstack-ll-romlogfc.txt"
-    #define PDATA_FILE "../data/rand-pwb-pfence-romlogfc.txt"
+    #ifdef SAME100_BENCH
+        #define DATA_FILE "../data/same100-green-pstack-ll-romlogfc.txt"
+        #define PDATA_FILE "../data/same100-pwb-pfence-romlogfc.txt"
+    #elif defined(RANDOP)
+        #define DATA_FILE "../data/randop-green-pstack-ll-romlogfc.txt"
+        #define PDATA_FILE "../data/randop-pwb-pfence-romlogfc.txt"
     #else
-    #define DATA_FILE "../data/green-pstack-ll-romlogfc.txt"
-    #define PDATA_FILE "../data/pwb-pfence-romlogfc.txt"
+        #define DATA_FILE "../data/green-pstack-ll-romlogfc.txt"
+        #define PDATA_FILE "../data/pwb-pfence-romlogfc.txt"
     #endif
 
 #elif defined USE_OFWF
@@ -34,19 +37,22 @@
 #endif
 
 #ifndef DATA_FILE
-#ifdef RANDOM_BENCH
-    #define DATA_FILE "../data/rand-green-pstack-ll-" PTM_FILEXT ".txt"
-    #else
-    #define DATA_FILE "../data/green-pstack-ll-" PTM_FILEXT ".txt"
+    #ifdef RANDOP
+        #define DATA_FILE "../data/randop-green-pstack-ll-" PTM_FILEXT ".txt"
+    #elif defined(SAME100_BENCH)
+        #define DATA_FILE "../data/same100-green-pstack-ll-" PTM_FILEXT ".txt"
+    #else 
+        #define DATA_FILE "../data/green-pstack-ll-" PTM_FILEXT ".txt"
     #endif
-
 #endif
 
 #ifndef PDATA_FILE
-#ifdef RANDOM_BENCH
-    #define PDATA_FILE "../data/rand-pwb-pfence-" PTM_FILEXT ".txt"
+    #ifdef RANDOP
+        #define PDATA_FILE "../data/randop-pwb-pfence-" PTM_FILEXT ".txt"
+    #elif defined SAME100_BENCH
+        #define PDATA_FILE "../data/same100-pwb-pfence-" PTM_FILEXT ".txt"
     #else
-    #define PDATA_FILE "../data/pwb-pfence-" PTM_FILEXT ".txt"
+        #define PDATA_FILE "../data/pwb-pfence-" PTM_FILEXT ".txt"
     #endif
 
 #endif
@@ -63,9 +69,10 @@ thread_local uint64_t tl_num_pwbs = 0;
 int main(void) {
     const std::string dataFilename { DATA_FILE };
     const std::string pdataFilename { PDATA_FILE };
-    // vector<int> threadList = { 1, 2, 4, 8, 10, 16, 24, 32, 40 };     // For Castor
-    std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 64, 68, 72, 76, 80 };     // For Castor
-    const int numRuns = 10;                                           // Number of runs
+    vector<int> threadList = { 1, 2, 4, 8, 10, 16, 24, 32, 40 };     // For Castor
+    // std::vector<int> threadList = { 1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 64, 68, 72, 76, 80 };     // For Castor
+    const int numRuns = 10;
+    // const int numRuns = 1;                                           // Number of runs
     const long numPairs = 1*MILLION;                                 // 1M is fast enough on the laptop
 
     tuple<uint64_t, double, double> results[threadList.size()];

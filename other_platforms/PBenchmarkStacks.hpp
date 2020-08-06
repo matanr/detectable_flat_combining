@@ -116,6 +116,7 @@ public:
      */
     template<typename STACK, typename PTM>
     tuple<uint64_t, double, double> pushPop(std::string& className, const long numPairs, const int numRuns) {
+        const int numSameOps = 100;
         cout << "in push pop" << endl;
         nanoseconds deltas[numThreads][numRuns];
         atomic<bool> startFlag = { false };
@@ -145,6 +146,33 @@ public:
             pwbCounter += tl_num_pwbs;
             #endif
         };
+
+        auto pushpop_k_lambda = [this,&startFlag,&numPairs, &numSameOps,&stack](nanoseconds *delta, const int tid) {  
+            //UserData* ud = new UserData{0,0};
+            uint64_t* ud = new uint64_t(42);
+            while (!startFlag.load()) {} // Spin until the startFlag is set
+            // Measurement phase
+            auto startBeats = steady_clock::now();
+            for (long long iter = 0; iter < numPairs/(numThreads*numSameOps); iter++) {
+                for (long iter_s = 0; iter_s < numSameOps; iter_s++) {
+                    stack->push(ud);
+                }
+                for (long iter_s = 0; iter_s < numSameOps; iter_s++) {
+                    if (stack->pop() == nullptr) cout << "Error at measurement pop() iter=" << iter << "\n";
+                }
+            }
+            auto stopBeats = steady_clock::now();
+            *delta = stopBeats - startBeats;
+            #if defined(COUNT_PWB) && (defined(USE_ROM_LOG_FC) || defined(USE_OFLF))
+            std::lock_guard<std::mutex> lock(pLock);
+            pwbCounter += localPwbCounter;
+            pfenceCounter += localPfenceCounter;
+            psyncCounter += localPsyncCounter;
+            #elif defined(COUNT_PWB) && defined(USE_PMDK)
+            std::lock_guard<std::mutex> lock(pLock);
+            pwbCounter += tl_num_pwbs;
+            #endif
+	};
 
         auto randop_lambda = [this,&startFlag,&numPairs,&stack](nanoseconds *delta, const int tid) {
 		uint64_t* ud = new uint64_t(42);
@@ -185,7 +213,9 @@ public:
                 });
             }
             thread enqdeqThreads[numThreads];
-            #ifdef RANDOM_BENCH
+            #ifdef SAME100_BENCH
+            for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = thread(pushpop_k_lambda, &deltas[tid][irun], tid);
+            #elsif defined RANDOP
             for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = thread(randop_lambda, &deltas[tid][irun], tid);
             #else
             for (int tid = 0; tid < numThreads; tid++) enqdeqThreads[tid] = thread(pushpop_lambda, &deltas[tid][irun], tid);
