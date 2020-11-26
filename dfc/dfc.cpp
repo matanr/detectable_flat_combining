@@ -46,9 +46,9 @@ using namespace std::literals::chrono_literals;
 // Name of persistent file mapping
 #ifndef PM_FILE_NAME
 // #define PM_FILE_NAME   "/home/matanr/recov_flat_combining/poolfile"
-// #define PM_FILE_NAME   "/dev/shm/dfc_shared"
+#define PM_FILE_NAME   "/dev/shm/dfc_shared"
 // #define PM_FILE_NAME   "/dev/dax4.0"
-#define PM_FILE_NAME   "/mnt/dfcpmem/dfc_shared"
+// #define PM_FILE_NAME   "/mnt/dfcpmem/dfc_shared"
 #endif
 
 // #define N 8  // number of processes
@@ -296,29 +296,29 @@ int reduce(persistent_ptr<detectable_fc> dfc) {
 
 	for (size_t i = 0; i < NN; i++) {
 		short validOp = dfc->announce_arr[i]->valid;
-		if (validOp / 10 == 1) {
+		size_t opVal = ANN(dfc, i, validOp)->val;
+		if ((validOp / 10 == 1) && (opVal == NONE)){
 			// size_t opEpoch = ANN(dfc, i, validOp)->epoch;
 			// size_t opVal = ANN(dfc, i, validOp)->val;
 			// if (opEpoch == dfc->cEpoch || opVal == NONE) {
-			size_t opVal = ANN(dfc, i, validOp)->val;
-			if (opVal == NONE) {
-				ANN(dfc, i, validOp)->epoch = dfc->cEpoch;
-				// PWB(&ANN(dfc, i, validOp)->epoch);  // needed if there is a chance that epoch will be persisted but val not
-				char opName = ANN(dfc, i, validOp)->name;
-				if (opName == PUSH_OP) {
-					top_push ++;
-					pushList[top_push] = i;
-					collectedValid[i] = validOp;
-				}
-				else if (opName == POP_OP) {
-					top_pop ++;
-					popList[top_pop] = i;
-					collectedValid[i] = validOp;
-				}
+			
+			// if (opVal == NONE) {
+			ANN(dfc, i, validOp)->epoch = dfc->cEpoch;
+			// PWB(&ANN(dfc, i, validOp)->epoch);  // needed if there is a chance that epoch will be persisted but val not
+			char opName = ANN(dfc, i, validOp)->name;
+			if (opName == PUSH_OP) {
+				top_push ++;
+				pushList[top_push] = i;
+				collectedValid[i] = validOp;
 			}
-			else{
-				collectedValid[i] = NONE;
+			else if (opName == POP_OP) {
+				top_pop ++;
+				popList[top_pop] = i;
+				collectedValid[i] = validOp;
 			}
+		}
+		else{
+			collectedValid[i] = NONE;
 		}
 	}
 	// IMPORTANT! make sure that there is no way that a combined op will change valid after it was collected.
@@ -398,7 +398,7 @@ void update_free_nodes(persistent_ptr<detectable_fc> dfc, size_t opEpoch) {
 size_t combine(persistent_ptr<detectable_fc> dfc, size_t opEpoch, pmem::obj::pool<root> pop, size_t pid) {
 	l_combining_counter ++;
 	int top_index = reduce(dfc);
-	persistent_ptr<node> head = dfc->top[(opEpoch/2)%2];
+	persistent_ptr<node> head = dfc->top[(dfc->cEpoch/2)%2];
 	if (top_index != 0) {
 		if (top_index > 0) { // push
 			top_index = top_index - 1;
@@ -486,14 +486,14 @@ size_t combine(persistent_ptr<detectable_fc> dfc, size_t opEpoch, pmem::obj::poo
 			} while (top_index != -1);
 		}		
 	}
-	dfc->top[(opEpoch/2 + 1) % 2] = head;
+	dfc->top[(dfc->cEpoch/2 + 1) % 2] = head;
 	for (int i=0; i<NN; i++) { //maybe persist on line. check on optane
 		short validOp = collectedValid[i];
 		if (validOp != NONE) {
 			PWB(&ANN(dfc, i, validOp));
 		}
 	}
-	PWB(&dfc->top[(opEpoch/2 + 1) % 2]);
+	PWB(&dfc->top[(dfc->cEpoch/2 + 1) % 2]);
 	PFENCE();
 	dfc->cEpoch = dfc->cEpoch + 1;
 	// this is important for the following case: the combiner updates the cEpoch, then several ops started to finish and return, 

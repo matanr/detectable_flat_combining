@@ -30,11 +30,12 @@ def plot_files(files):
 
         data[name_to_index[name]] = [x, y, name]
 
+    fig = plt.figure(figsize=(6.0, 4.0))
     for d in data:
         plt.plot(d[0], d[1], 'o-', label=d[2])
 
-    plt.xlabel('Threads', size=10)
-    plt.ylabel('Ops/sec', size=10)
+    plt.xlabel('threads', size=10)
+    plt.ylabel('ops/sec', size=10)
     plt.yticks([1e5, 3e5, 5e5, 7e5, 9e5, 11e5, 13e5, 15e5], (r'$1\times 10^5$', r'$3\times 10^5$', r'$5\times 10^5$',
                                                              r'$7\times 10^5$', r'$9\times 10^5$', r'$1.1\times 10^6$',
                                                              r'$1.3\times 10^6$', r'$1.5\times 10^6$'))
@@ -46,7 +47,8 @@ def plot_files(files):
     # plt.title('Comparison on 40 logical cores machine\nwith NVRAM, using CLFLUSHOPT')
     plt.legend()
     plt.tight_layout()
-    plt.savefig("Graph_of_" + FLAGS.prefix, dpi=None)
+    # figure.set_size_inches(40, 30)
+    plt.savefig("new_Graph_of_" + FLAGS.prefix, dpi=None )
     plt.show()
 
 
@@ -95,12 +97,13 @@ def plot_pwb_files(files):
 
             data[name_to_index[name]] = [x, y1, y2, name]
 
+    fig = plt.figure(figsize=(6.0, 4.0))
     for d in data:
         plt.plot(d[0], d[1], 'o-', label=d[3])
-    plt.plot(data[0][0], data[0][4], 'o:', label="Total " + data[0][3])
+    plt.plot(data[0][0], data[0][4], 'co:', label=data[0][3]+"-Total")
 
-    plt.xlabel('Threads', size=10)
-    plt.ylabel('PWB/Op', size=10)
+    plt.xlabel('threads', size=10)
+    plt.ylabel('pwb/op', size=10)
     # plt.xticks([1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40], (1, 2, 4, 8, 10, 16, 18, 20,
     #                                                                               22, 24, 26, 28, 30, 32, 34,
     #                                                                               36, 40))
@@ -108,16 +111,17 @@ def plot_pwb_files(files):
     plt.yticks([0, 1.5, 3.5, 8.5, 20, 30, 40, 50], (0, 1.5, 3.5, 8.5, 20, 30, 40, 50))
     # plt.title('Comparison of PWB per Operation')
     plt.legend()
-    plt.savefig("PWB_Graph_of_" + FLAGS.prefix, dpi=None)
+    plt.savefig("new_PWB_Graph_of_" + FLAGS.prefix, dpi=None)
     plt.show()
     plt.close()
 
+    fig = plt.figure(figsize=(6.0, 4.0))
     for d in data:
         plt.plot(d[0], d[2], 'o-', label=d[3])
-    plt.plot(data[0][0], data[0][5], 'o:', label="Total "+data[0][3])
+    plt.plot(data[0][0], data[0][5], 'co:', label=data[0][3]+"-Total")
 
-    plt.xlabel('Threads', size=10)
-    plt.ylabel('PFENCE/Op', size=10)
+    plt.xlabel('threads', size=10)
+    plt.ylabel('pfence/op', size=10)
     # plt.xticks([1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40], (1, 2, 4, 8, 10, 16, 18, 20,
     #                                                                               22, 24, 26, 28, 30, 32, 34,
     #                                                                               36, 40))
@@ -125,7 +129,7 @@ def plot_pwb_files(files):
     plt.yticks(size=10)
     # plt.title('Comparison of PFENCE per Operation')
     plt.legend()
-    plt.savefig("PFENCE_Graph_of_" + FLAGS.prefix, dpi=None)
+    plt.savefig("new_PFENCE_Graph_of_" + FLAGS.prefix, dpi=None)
     plt.show()
 
 
@@ -154,11 +158,12 @@ def plot_combining_files(files):
             label_name = name + "-PUSH-POP"
             data[name_to_index[name]] = [x, y5, label_name]
 
+    fig = plt.figure(figsize=(6.0, 4.0))
     for d in data:
         plt.plot(d[0], d[1], 'o-', label=d[2])
 
-    plt.xlabel('Threads', size=10)
-    plt.ylabel('Combinings/Ops', size=10)
+    plt.xlabel('threads', size=10)
+    plt.ylabel('combinings/ops', size=10)
     plt.yscale('log')
     # plt.xticks([1, 2, 4, 8, 10, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 40], (1, 2, 4, 8, 10, 16, 18, 20,
     #                                                                               22, 24, 26, 28, 30, 32, 34,
@@ -167,7 +172,7 @@ def plot_combining_files(files):
     # plt.yticks([0, 1.5, 3.5, 8.5, 20, 30, 40, 50], (0, 1.5, 3.5, 8.5, 20, 30, 40, 50))
     # plt.title('Comparison of PWB per Operation')
     plt.legend()
-    plt.savefig("COMB_Graph_of_" + FLAGS.prefix, dpi=None)
+    plt.savefig("new_COMB_Graph_of_" + FLAGS.prefix, dpi=None)
     plt.show()
 
 
